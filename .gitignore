@@ -1,0 +1,6 @@
+google_credentials.json
+raw_cache/
+reports/
+*.xlsx
+__pycache__/
+*.pyc
