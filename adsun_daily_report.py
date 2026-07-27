@@ -104,14 +104,20 @@ REPORT_COLUMNS = [
 ]
 
 
-def compute_window(now: datetime):
-    """Tra ve (business_day_start, now) — "ngay lam viec" bat dau tu 8h sang
-    gan nhat da qua (hom nay neu da qua 8h, hom qua neu chua). Cua so LUON
-    ket thuc o "now" (dang chay), khong co dinh 8h nhu truoc, de ho tro chay
-    lap lai nhieu lan trong ngay va thay du lieu cap nhat dan."""
-    boundary = now.replace(hour=8, minute=0, second=0, microsecond=0)
-    business_day_start = boundary if now >= boundary else boundary - timedelta(days=1)
-    return business_day_start, now
+ROLLING_WINDOW_HOURS = 2
+
+
+def compute_window(now: datetime, rolling_hours=ROLLING_WINDOW_HOURS):
+    """Tra ve (now - rolling_hours, now) — cua so "N gio gan nhat" (mac dinh
+    2 gio), KHONG con la ca ngay lam viec tu 8h sang nhu truoc. Ly do doi:
+    moi lan chay (moi 15 phut tren may local, moi gio qua GitHub Actions) se
+    GHI DE lai dung khoang nay — vi cac lan chay lien tiep co khoang trung
+    lap nhau lon (2 gio > chu ky chay), 1 lan bi loi/thieu du lieu (vd su co
+    ghi Google Sheets ngay 27/7) se DUOC TU SUA boi lan chay ke tiep, khong
+    can can thiep thu cong. Cung nhanh hon ro ret so voi xu ly ca ngay lam
+    viec (vd luc 15h chieu se phai xu ly toi 7 tieng du lieu neu con dung
+    kieu cu)."""
+    return now - timedelta(hours=rolling_hours), now
 
 
 def export_all_vehicles(page, raw_dir: Path, range_preset=RAW_RANGE_PRESET):
@@ -158,7 +164,11 @@ def export_all_vehicles(page, raw_dir: Path, range_preset=RAW_RANGE_PRESET):
 
         except Exception as e:
             print(f"  [{plate}] LỖI khi xuất, bỏ qua xe này: {e}", file=sys.stderr)
-            results.append((plate, None))
+            # Dung chuoi "ERROR" (khac None) de phan biet voi truong hop
+            # "khong co du lieu that su" (has_no_data) — xe loi KHONG duoc
+            # dua vao danh sach thay du lieu (xem only_replace_plates o main()),
+            # tranh xoa mat du lieu cu con dang dung cua xe do.
+            results.append((plate, "ERROR"))
 
     return results
 
@@ -353,7 +363,7 @@ def process_vehicle_dataframe(plate, df, window_start, window_end, zone_polygons
 def merge_reports(results, window_start, window_end, zone_polygons=None, pair_rules=None):
     all_rows = []
     for plate, raw_path in results:
-        if raw_path is None:
+        if raw_path is None or raw_path == "ERROR":
             continue
         try:
             df = pd.read_excel(raw_path, header=HEADER_ROW_INDEX)
@@ -392,6 +402,39 @@ def format_workbook(path, hidden_column_names):
     wb.save(path)
 
 
+def upsert_split_by_month(merged, range_start, range_end, only_replace_plates=None):
+    """upsert_range_report ghi theo 1 tab-thang duy nhat — neu khoang can cap
+    nhat vo tinh vat qua ranh gioi thang (hiem, chi xay quanh nua dem dau
+    thang do dung cua so lan can "N gio gan nhat"), chia nho ra ghi dung
+    tung tab thang tuong ung, tranh ghi nham/mat du lieu thang ke tiep.
+
+    only_replace_plates: xem docstring cua sheets_client.upsert_range_report
+    — BAT BUOC truyen dung tap bien so DA QUET THANH CONG lan nay, neu khong
+    nhung xe bi loi/bo qua se bi XOA MAT du lieu cu thay vi duoc giu nguyen."""
+    boundaries = [range_start]
+    cursor = range_start.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    while cursor <= range_end:
+        next_month = cursor.month + 1 if cursor.month < 12 else 1
+        next_year = cursor.year if cursor.month < 12 else cursor.year + 1
+        cursor = cursor.replace(year=next_year, month=next_month)
+        if range_start < cursor < range_end:
+            boundaries.append(cursor)
+    boundaries.append(range_end)
+    boundaries = sorted(set(boundaries))
+
+    for i in range(len(boundaries) - 1):
+        seg_start, seg_end = boundaries[i], boundaries[i + 1]
+        seg_rows = merged[(merged["Thời điểm A"] >= seg_start) & (merged["Thời điểm A"] < seg_end)]
+        tab_name = f"{seg_start:%Y-%m}"
+        sheets_client.upsert_range_report(
+            tab_name, seg_start, seg_end, seg_rows[REPORT_COLUMNS], only_replace_plates=only_replace_plates
+        )
+        print(
+            f"Đã cập nhật tab '{tab_name}' cho khoảng {seg_start:%d/%m/%Y %H:%M} -> "
+            f"{seg_end:%d/%m/%Y %H:%M} ({len(seg_rows)} dòng)."
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Xuất báo cáo hành trình tổng hợp toàn bộ xe (8h hôm qua - 8h hôm nay)"
@@ -411,7 +454,7 @@ def main():
 
     now = datetime.now()
     window_start, window_end = compute_window(now)
-    print(f"Khung thời gian báo cáo (ngày làm việc): {window_start:%d/%m/%Y %H:%M} -> {window_end:%d/%m/%Y %H:%M}")
+    print(f"Khung thời gian báo cáo ({ROLLING_WINDOW_HOURS} giờ gần nhất): {window_start:%d/%m/%Y %H:%M} -> {window_end:%d/%m/%Y %H:%M}")
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -456,6 +499,11 @@ def main():
         pair_rules = []
         print(f"Không tải được danh sách cặp vùng tùy chỉnh ({e}).", file=sys.stderr)
 
+    # Chi nhung xe QUET THANH CONG lan nay (co du lieu hoac xac nhan khong co
+    # du lieu that su) moi duoc phep thay du lieu cu — xe bi loi ("ERROR")
+    # se duoc GIU NGUYEN du lieu cu, khong bi xoa mat (xem upsert_split_by_month).
+    successful_plates = {plate for plate, status in results if status != "ERROR"}
+
     print("Đang gộp và lọc dữ liệu theo đúng khung giờ...")
     merged = merge_reports(results, window_start, window_end, zone_polygons, pair_rules)
 
@@ -479,13 +527,11 @@ def main():
     print(f"Đã lưu báo cáo tổng hợp: {output_path.resolve()} ({len(merged)} dòng)")
 
     try:
-        month_tab = f"{window_start:%Y-%m}"
-        range_end = window_start + timedelta(days=1)
-        sheets_client.upsert_range_report(month_tab, window_start, range_end, merged[REPORT_COLUMNS])
-        print(
-            f"Đã cập nhật tab '{month_tab}' trên Google Sheets "
-            f"(chỉ thay phần dữ liệu ngày {window_start:%d/%m/%Y}, giữ nguyên các ngày khác)."
-        )
+        # Dung window_end (= "now" thuc su, tra ve tu compute_window), KHONG
+        # phai window_start + 1 ngay — nham lan nay se lam upsert ghi de mot
+        # khoang thoi gian tuong lai rat lon (loi da tung xay ra khi doi sang
+        # cua so "N gio gan nhat" ma quen sua cho nay).
+        upsert_split_by_month(merged[FINAL_COLUMNS], window_start, window_end, only_replace_plates=successful_plates)
     except Exception as e:
         print(f"Không đẩy được báo cáo lên Google Sheets: {e}", file=sys.stderr)
 
