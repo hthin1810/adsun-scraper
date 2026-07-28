@@ -104,14 +104,20 @@ REPORT_COLUMNS = [
 ]
 
 
-def compute_window(now: datetime):
-    """Tra ve (business_day_start, now) — "ngay lam viec" bat dau tu 8h sang
-    gan nhat da qua (hom nay neu da qua 8h, hom qua neu chua). Cua so LUON
-    ket thuc o "now" (dang chay), khong co dinh 8h nhu truoc, de ho tro chay
-    lap lai nhieu lan trong ngay va thay du lieu cap nhat dan."""
-    boundary = now.replace(hour=8, minute=0, second=0, microsecond=0)
-    business_day_start = boundary if now >= boundary else boundary - timedelta(days=1)
-    return business_day_start, now
+ROLLING_WINDOW_HOURS = 2
+
+
+def compute_window(now: datetime, rolling_hours=ROLLING_WINDOW_HOURS):
+    """Tra ve (now - rolling_hours, now) — cua so "N gio gan nhat" (mac dinh
+    2 gio), KHONG con la ca ngay lam viec tu 8h sang nhu truoc. Ly do doi:
+    moi lan chay (moi 15 phut tren may local, moi gio qua GitHub Actions) se
+    GHI DE lai dung khoang nay — vi cac lan chay lien tiep co khoang trung
+    lap nhau lon (2 gio > chu ky chay), 1 lan bi loi/thieu du lieu (vd su co
+    ghi Google Sheets ngay 27/7) se DUOC TU SUA boi lan chay ke tiep, khong
+    can can thiep thu cong. Cung nhanh hon ro ret so voi xu ly ca ngay lam
+    viec (vd luc 15h chieu se phai xu ly toi 7 tieng du lieu neu con dung
+    kieu cu)."""
+    return now - timedelta(hours=rolling_hours), now
 
 
 def export_all_vehicles(page, raw_dir: Path, range_preset=RAW_RANGE_PRESET):
@@ -158,7 +164,11 @@ def export_all_vehicles(page, raw_dir: Path, range_preset=RAW_RANGE_PRESET):
 
         except Exception as e:
             print(f"  [{plate}] LỖI khi xuất, bỏ qua xe này: {e}", file=sys.stderr)
-            results.append((plate, None))
+            # Dung chuoi "ERROR" (khac None) de phan biet voi truong hop
+            # "khong co du lieu that su" (has_no_data) — xe loi KHONG duoc
+            # dua vao danh sach thay du lieu (xem only_replace_plates o main()),
+            # tranh xoa mat du lieu cu con dang dung cua xe do.
+            results.append((plate, "ERROR"))
 
     return results
 
@@ -171,23 +181,27 @@ def is_empty_zone(value):
 
 def extract_zone_points(df):
     """Loc bo cac dong khong co Vung, roi gop cac dong LIEN TIEP cung mot Vung
-    thanh 1 diem duy nhat (giu lai thoi diem SOM NHAT trong nhom do)."""
+    thanh 1 diem duy nhat — nhung GIU LAI CA HAI moc thoi gian cua nhom do:
+    thoi diem DEN (ping dau tien, luu o TIME_COLUMN nhu truoc) va thoi diem
+    RỜI (ping CUOI CUNG con o vung do truoc khi doi vung, luu o "_leave").
+    build_transition_rows se dung thoi diem RỜI cho Vung A (gio lay = luc xe
+    THUC SU roi khoi noi lay hang, khong phai luc vua den do) va thoi diem
+    DEN cho Vung B (gio giao = luc xe vua toi noi giao)."""
     points = []
     for _, row in df.iterrows():
         zone = row[ZONE_COLUMN]
         if is_empty_zone(zone):
             continue
+        snapshot = {
+            TIME_COLUMN: row[TIME_COLUMN],
+            "Tọa độ": row.get("Tọa độ"),
+            "Địa chỉ": row.get("Địa chỉ"),
+            "Nhiên liệu": row.get("Nhiên liệu"),
+        }
         if points and points[-1][ZONE_COLUMN] == zone:
-            continue  # cung vung voi diem truoc do -> bo qua, giu dong som nhat
-        points.append(
-            {
-                TIME_COLUMN: row[TIME_COLUMN],
-                ZONE_COLUMN: zone,
-                "Tọa độ": row.get("Tọa độ"),
-                "Địa chỉ": row.get("Địa chỉ"),
-                "Nhiên liệu": row.get("Nhiên liệu"),
-            }
-        )
+            points[-1]["_leave"] = snapshot  # van con o vung nay -> cap nhat moc "roi" moi nhat
+            continue
+        points.append({**snapshot, ZONE_COLUMN: zone, "_leave": snapshot})
     return points
 
 
@@ -195,6 +209,13 @@ def extract_zone_points(df):
 # hoac dung "BÃI RẠCH CHIẾC" / "BÃI TẬP KẾT". Cac vung khac (Fico Mai Chi Tho,
 # Fico Cat Lai...) mac dinh la Vung B.
 ANCHOR_EXACT = {"BÃI RẠCH CHIẾC", "BÃI TẬP KẾT"}
+
+# "VLXD BỜM" LUON duoc uu tien chon lam Vung B thuc su neu xuat hien trong 1
+# nhom vai tro B lien tiep — vi duong vao "VLXD BỜM" phai di ngang qua "VLXD
+# DƯƠNG" truoc (va thuong quay lai ngang qua DƯƠNG lan nua khi ra), nen neu
+# chi lay diem CUOI CUNG trong nhom (mac dinh) se de nham thanh DƯƠNG la diem
+# den thuc su thay vi BỜM (da gap thuc te: xe 51M68032 luc 3h32 sang 28/7).
+PRIORITY_B_ZONES = {"VLXD BỜM"}
 
 
 def _name_upper(p):
@@ -225,13 +246,24 @@ def _pair_touches(points, idx, pair_rules_upper):
     return False
 
 
+def _pick_group_representative(points, i, j):
+    """Chon diem dai dien cho 1 nhom vai tro lien tiep points[i..j]: uu tien
+    diem nao thuoc PRIORITY_B_ZONES (vd "VLXD BỜM") neu co trong nhom, neu
+    khong moi lay diem CUOI CUNG nhu mac dinh."""
+    for k in range(i, j + 1):
+        if _name_upper(points[k]) in PRIORITY_B_ZONES:
+            return points[k]
+    return points[j]
+
+
 def _collapse_runs(points, pair_rules_upper):
     """Gop cac diem LIEN TIEP cung vai tro mac dinh (A voi A, B voi B) thanh 1
-    diem duy nhat (giu diem CUOI CUNG trong nhom) — vi du xe di ngang qua
-    nhieu vung dich lien tiep truoc khi quay lai dung vung neo xuat phat, chi
-    vung dich CUOI cung truoc khi quay lai moi la diem dung that su. Cac diem
-    la "diem noi" (hinge — hoac bi ep dong vai B nhu BÃI TẬP KẾT sau MỎ, hoac
-    la 1 dau cua cap tuy chinh) khong bao gio bi gop, luon dung rieng le."""
+    diem duy nhat (giu diem CUOI CUNG trong nhom, TRU KHI nhom co diem thuoc
+    PRIORITY_B_ZONES — xem _pick_group_representative) — vi du xe di ngang
+    qua nhieu vung dich lien tiep truoc khi quay lai dung vung neo xuat phat,
+    chi vung dich CUOI cung truoc khi quay lai moi la diem dung that su. Cac
+    diem la "diem noi" (hinge — hoac bi ep dong vai B nhu BÃI TẬP KẾT sau MỎ,
+    hoac la 1 dau cua cap tuy chinh) khong bao gio bi gop, luon dung rieng le."""
     reduced = []
     n = len(points)
     i = 0
@@ -257,9 +289,37 @@ def _collapse_runs(points, pair_rules_upper):
             if nxt_boundary or nxt_role != role:
                 break
             j += 1
-        reduced.append(points[j])  # giu diem cuoi cung cua nhom cung vai tro
+        reduced.append(_pick_group_representative(points, i, j))
         i = j + 1
     return reduced
+
+
+HOANG_THINH_NAME = "HOÀNG THỊNH RẠCH CHIẾC"
+
+
+def _is_anchor_neighbor(name_upper):
+    return name_upper is not None and (name_upper.startswith("MỎ") or name_upper in ANCHOR_EXACT)
+
+
+def _filter_hoang_thinh_noise(points):
+    """HOÀNG THỊNH RẠCH CHIẾC nam rat gan BÃI RẠCH CHIẾC ve toa do, de bi
+    nham la 1 diem dung that su trong khi thuc ra chi la nhieu GPS luc xe
+    dang di ngang qua khu vuc do tren duong toi/roi 1 vung khac (da gap thuc
+    te: an mat mot luot ghe FICO MAI CHÍ THỌ ngay 24/7 vi HOÀNG THỊNH xen vao
+    ngay sau do). Chi cong nhan la diem dung THAT SU neu CA HAI diem lien ke
+    (ngay truoc va ngay sau no trong day diem) deu la vung neo (MỎ*/BÃI TẬP
+    KẾT/BÃI RẠCH CHIẾC) — neu khong, loai bo hoan toan khoi day diem (nhu
+    chua tung xuat hien), tranh no "an" mat diem den that su ke ben."""
+    n = len(points)
+    result = []
+    for i, p in enumerate(points):
+        if _name_upper(p) == HOANG_THINH_NAME:
+            prev_upper = _name_upper(points[i - 1]) if i > 0 else None
+            next_upper = _name_upper(points[i + 1]) if i + 1 < n else None
+            if not (_is_anchor_neighbor(prev_upper) and _is_anchor_neighbor(next_upper)):
+                continue
+        result.append(p)
+    return result
 
 
 def build_transition_rows(points, plate, pair_rules=None):
@@ -275,6 +335,7 @@ def build_transition_rows(points, plate, pair_rules=None):
         khi no se "mo lai" duoc (bi ep dong vai B nhu BÃI TẬP KẾT, hoac la dau
         A cua 1 cap tuy chinh voi diem ke tiep) — neu khong thi dong lai (ve
         vung neo, khong ghi)."""
+    points = _filter_hoang_thinh_noise(points)
     pair_rules_upper = {(a.strip().upper(), b.strip().upper()) for a, b in (pair_rules or [])}
     reduced = _collapse_runs(points, pair_rules_upper)
 
@@ -283,17 +344,18 @@ def build_transition_rows(points, plate, pair_rules=None):
     n = len(reduced)
 
     def make_row(a, b):
+        a_leave = a["_leave"]  # gio lay = luc RỜI khoi Vung A (ping cuoi cung con o do)
         return {
-            "Thời điểm A": a[TIME_COLUMN],
+            "Thời điểm A": a_leave[TIME_COLUMN],
             "Thời điểm B": b[TIME_COLUMN],
             "Biển số xe": plate,
             "Vùng A": a[ZONE_COLUMN],
             "Vùng B": b[ZONE_COLUMN],
-            "Tọa độ A": a["Tọa độ"],
+            "Tọa độ A": a_leave["Tọa độ"],
             "Tọa độ B": b["Tọa độ"],
-            "Địa chỉ A": a["Địa chỉ"],
+            "Địa chỉ A": a_leave["Địa chỉ"],
             "Địa chỉ B": b["Địa chỉ"],
-            "Nhiên liệu A": a["Nhiên liệu"],
+            "Nhiên liệu A": a_leave["Nhiên liệu"],
             "Nhiên liệu B": b["Nhiên liệu"],
         }
 
@@ -329,14 +391,27 @@ def build_transition_rows(points, plate, pair_rules=None):
 
 
 def process_vehicle_dataframe(plate, df, window_start, window_end, zone_polygons=None, pair_rules=None):
-    """Loc theo khung gio + tinh Vung + tao cac dong chuyen vung cho 1 xe.
-    Dung chung cho ca luong doc tu file tam (adsun_daily_report) va luong
-    doc tu cache/DataFrame trong bo nho (backfill_month)."""
+    """Tinh Vung + tao cac dong chuyen vung cho 1 xe TU TOAN BO du lieu ping
+    truyen vao (KHONG loc theo khung gio truoc khi tinh), roi CHI LOC CAC
+    DONG KET QUA (transition) theo "Thời điểm A" nam trong [window_start,
+    window_end). Dung chung cho ca luong doc tu file tam (adsun_daily_report)
+    va luong doc tu cache/DataFrame trong bo nho (backfill_month, refresh_range).
+
+    QUAN TRONG: truoc day ham nay loc RAW PING truoc (df = df[window_start <=
+    t < window_end]) roi moi tinh diem/chuyen vung — dieu nay lam GAY mat 1
+    chuyen di neu diem KET THUC (Thời điểm B) roi ra ngoai window nhung diem
+    BAT DAU (Thời điểm A) van nam trong window (vi ping ket thuc bi cat mat,
+    "diem dang mo" khong bao gio duoc dong lai nen khong sinh ra dong nao).
+    Day chinh la nguyen nhan lam mat dong 51M65797 09:57:26 -> 10:28:01 khi
+    chay refresh_range.py voi --to "...10:00" (dong bi cat vi 10:28:01 > 10:00).
+    Sua bang cach: tinh transition tu FULL du lieu ping duoc truyen vao (caller
+    chiu trach nhiem truyen du du lieu, vd ca ngay/nhieu ngay), chi loc O DAU
+    RA theo Thời điểm A — vay du chuyen di bat dau trong window luon duoc tinh
+    dung du no ket thuc sau window bao nhieu."""
     if TIME_COLUMN not in df.columns or ZONE_COLUMN not in df.columns:
         print(f"  [{plate}] Thiếu cột cần thiết, bỏ qua.", file=sys.stderr)
         return []
 
-    df = df[(df[TIME_COLUMN] >= window_start) & (df[TIME_COLUMN] < window_end)]
     if df.empty:
         return []
     df = df.sort_values(TIME_COLUMN)
@@ -347,13 +422,14 @@ def process_vehicle_dataframe(plate, df, window_start, window_end, zone_polygons
         df = zone_matching.compute_zone_column(df, zone_polygons)
 
     points = extract_zone_points(df)
-    return build_transition_rows(points, plate, pair_rules)
+    rows = build_transition_rows(points, plate, pair_rules)
+    return [r for r in rows if window_start <= r["Thời điểm A"] < window_end]
 
 
 def merge_reports(results, window_start, window_end, zone_polygons=None, pair_rules=None):
     all_rows = []
     for plate, raw_path in results:
-        if raw_path is None:
+        if raw_path is None or raw_path == "ERROR":
             continue
         try:
             df = pd.read_excel(raw_path, header=HEADER_ROW_INDEX)
@@ -392,6 +468,39 @@ def format_workbook(path, hidden_column_names):
     wb.save(path)
 
 
+def upsert_split_by_month(merged, range_start, range_end, only_replace_plates=None):
+    """upsert_range_report ghi theo 1 tab-thang duy nhat — neu khoang can cap
+    nhat vo tinh vat qua ranh gioi thang (hiem, chi xay quanh nua dem dau
+    thang do dung cua so lan can "N gio gan nhat"), chia nho ra ghi dung
+    tung tab thang tuong ung, tranh ghi nham/mat du lieu thang ke tiep.
+
+    only_replace_plates: xem docstring cua sheets_client.upsert_range_report
+    — BAT BUOC truyen dung tap bien so DA QUET THANH CONG lan nay, neu khong
+    nhung xe bi loi/bo qua se bi XOA MAT du lieu cu thay vi duoc giu nguyen."""
+    boundaries = [range_start]
+    cursor = range_start.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    while cursor <= range_end:
+        next_month = cursor.month + 1 if cursor.month < 12 else 1
+        next_year = cursor.year if cursor.month < 12 else cursor.year + 1
+        cursor = cursor.replace(year=next_year, month=next_month)
+        if range_start < cursor < range_end:
+            boundaries.append(cursor)
+    boundaries.append(range_end)
+    boundaries = sorted(set(boundaries))
+
+    for i in range(len(boundaries) - 1):
+        seg_start, seg_end = boundaries[i], boundaries[i + 1]
+        seg_rows = merged[(merged["Thời điểm A"] >= seg_start) & (merged["Thời điểm A"] < seg_end)]
+        tab_name = f"{seg_start:%Y-%m}"
+        sheets_client.upsert_range_report(
+            tab_name, seg_start, seg_end, seg_rows[REPORT_COLUMNS], only_replace_plates=only_replace_plates
+        )
+        print(
+            f"Đã cập nhật tab '{tab_name}' cho khoảng {seg_start:%d/%m/%Y %H:%M} -> "
+            f"{seg_end:%d/%m/%Y %H:%M} ({len(seg_rows)} dòng)."
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Xuất báo cáo hành trình tổng hợp toàn bộ xe (8h hôm qua - 8h hôm nay)"
@@ -411,7 +520,7 @@ def main():
 
     now = datetime.now()
     window_start, window_end = compute_window(now)
-    print(f"Khung thời gian báo cáo (ngày làm việc): {window_start:%d/%m/%Y %H:%M} -> {window_end:%d/%m/%Y %H:%M}")
+    print(f"Khung thời gian báo cáo ({ROLLING_WINDOW_HOURS} giờ gần nhất): {window_start:%d/%m/%Y %H:%M} -> {window_end:%d/%m/%Y %H:%M}")
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -456,6 +565,11 @@ def main():
         pair_rules = []
         print(f"Không tải được danh sách cặp vùng tùy chỉnh ({e}).", file=sys.stderr)
 
+    # Chi nhung xe QUET THANH CONG lan nay (co du lieu hoac xac nhan khong co
+    # du lieu that su) moi duoc phep thay du lieu cu — xe bi loi ("ERROR")
+    # se duoc GIU NGUYEN du lieu cu, khong bi xoa mat (xem upsert_split_by_month).
+    successful_plates = {plate for plate, status in results if status != "ERROR"}
+
     print("Đang gộp và lọc dữ liệu theo đúng khung giờ...")
     merged = merge_reports(results, window_start, window_end, zone_polygons, pair_rules)
 
@@ -479,13 +593,11 @@ def main():
     print(f"Đã lưu báo cáo tổng hợp: {output_path.resolve()} ({len(merged)} dòng)")
 
     try:
-        month_tab = f"{window_start:%Y-%m}"
-        range_end = window_start + timedelta(days=1)
-        sheets_client.upsert_range_report(month_tab, window_start, range_end, merged[REPORT_COLUMNS])
-        print(
-            f"Đã cập nhật tab '{month_tab}' trên Google Sheets "
-            f"(chỉ thay phần dữ liệu ngày {window_start:%d/%m/%Y}, giữ nguyên các ngày khác)."
-        )
+        # Dung window_end (= "now" thuc su, tra ve tu compute_window), KHONG
+        # phai window_start + 1 ngay — nham lan nay se lam upsert ghi de mot
+        # khoang thoi gian tuong lai rat lon (loi da tung xay ra khi doi sang
+        # cua so "N gio gan nhat" ma quen sua cho nay).
+        upsert_split_by_month(merged[FINAL_COLUMNS], window_start, window_end, only_replace_plates=successful_plates)
     except Exception as e:
         print(f"Không đẩy được báo cáo lên Google Sheets: {e}", file=sys.stderr)
 
