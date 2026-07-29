@@ -187,11 +187,29 @@ def _write_full_tab(ss, ws, dataframe):
     ss.batch_update({"requests": _autofit_column_requests(ws, dataframe)})
 
 
-def upsert_range_report(tab_name, range_start, range_end, new_dataframe, time_column="Thời điểm A"):
+def upsert_range_report(
+    tab_name,
+    range_start,
+    range_end,
+    new_dataframe,
+    time_column="Thời điểm A",
+    plate_column="Biển số xe",
+    only_replace_plates=None,
+):
     """Cap nhat 1 tab (thuong dat ten theo thang, vd '2026-07') bang cach CHI
     THAY du lieu co time_column nam trong [range_start, range_end) — giu
     nguyen toan bo du lieu cac ngay/gio khac da co san trong tab do. Phu hop
     de chay lap lai (moi gio) ma khong can quet/ghi lai toan bo thang.
+
+    only_replace_plates (tuy chon, mot tap bien so xe): neu duoc truyen, CHI
+    thay du lieu cua NHUNG XE DO trong khoang thoi gian — du lieu cua cac xe
+    KHAC (vd 1 xe bi loi khi quet, khong nam trong tap nay) van duoc GIU
+    NGUYEN du cung nam trong khoang [range_start, range_end). Bat buoc phai
+    dung tham so nay bat cu khi nao co kha nang 1 vai xe bi loi/bo qua giua
+    chung — neu khong, du lieu cu cua nhung xe do se bi XOA MAT thay vi giu
+    nguyen (day chinh la nguyen nhan gay mat du lieu that su xay ra ngay
+    27/7 — 1 xe loi khi quet backfill ca thang lam xoa mat du lieu ca thang
+    cua xe do).
 
     Viec doc + ghi lai ca tab la 1 API call re (vai tram/nghin dong van nhanh);
     phan TON THOI GIAN THAT (quet Adsun bang trinh duyet) chi gioi han trong
@@ -216,7 +234,12 @@ def upsert_range_report(tab_name, range_start, range_end, new_dataframe, time_co
             t = pd.to_datetime(r[time_column])
         except Exception:
             continue
-        if not (range_start <= t < range_end):
+        in_range = range_start <= t < range_end
+        if not in_range:
+            kept_rows.append(r)
+        elif only_replace_plates is not None and r.get(plate_column) not in only_replace_plates:
+            # Xe nay KHONG nam trong danh sach duoc phep thay lan nay (vd bi
+            # loi khi quet) — giu nguyen dong cu, khong xoa.
             kept_rows.append(r)
 
     if kept_rows:
@@ -235,20 +258,30 @@ def upsert_range_report(tab_name, range_start, range_end, new_dataframe, time_co
 
 
 REFRESH_TAB = "RefreshRequest"
-REFRESH_HEADER = ["requested_at", "status", "completed_at"]
+REFRESH_HEADER = ["requested_at", "status", "completed_at", "range_start", "range_end", "mode"]
 
 
-def request_refresh():
+def request_refresh(range_start=None, range_end=None, mode="scrape"):
     """Ghi 1 yeu cau 'Cap nhat ngay' — bat ke nguoi dung dang mo web qua link
     local (Cloudflare Tunnel) hay link PythonAnywhere, ca 2 deu ghi vao CHUNG
     1 Google Sheet nay. Tien trinh theo doi tren may local (refresh_watcher.py,
     chay moi 1 phut qua Task Scheduler) se phat hien va kich hoat quet ngay,
     vi viec quet Adsun (Playwright) chi chay duoc tren may local co trinh
-    duyet, khong chay duoc tren PythonAnywhere."""
+    duyet, khong chay duoc tren PythonAnywhere.
+
+    range_start/range_end (chuoi "YYYY-MM-DD HH:MM", tuy chon): neu co, chi
+    lam moi DUNG khoang thoi gian do (nhanh hon, giup sua dung cho nhung
+    khoang bi loi/thieu ma khong can quet lai ca ngay/ca thang). Neu bo trong,
+    mac dinh lam moi theo cua so cap nhat thong thuong (xem adsun_daily_report.py).
+
+    mode: "scrape" (mac dinh) — quet du lieu MOI tu Adsun. "recompute" — KHONG
+    quet Adsun, chi tinh lai Vung A/B cho toan bo du lieu DA CO san trong cache
+    bang danh sach vung/cap vung MOI NHAT (dung khi vua them/sua vung tren ban
+    do, nhanh hon nhieu vi khong can dang nhap/quet gi ca)."""
     ss = get_report_spreadsheet()
     ws = get_or_create_worksheet(ss, REFRESH_TAB, header=REFRESH_HEADER)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    ws.update("A2:C2", [[now, "pending", ""]])
+    ws.update("A2:F2", [[now, "pending", "", range_start or "", range_end or "", mode or "scrape"]])
     return now
 
 
@@ -257,9 +290,23 @@ def get_refresh_status():
     ws = get_or_create_worksheet(ss, REFRESH_TAB, header=REFRESH_HEADER)
     values = ws.get_all_values()
     if len(values) < 2:
-        return {"requested_at": None, "status": None, "completed_at": None}
-    row = values[1] + ["", "", ""]
-    return {"requested_at": row[0] or None, "status": row[1] or None, "completed_at": row[2] or None}
+        return {
+            "requested_at": None,
+            "status": None,
+            "completed_at": None,
+            "range_start": None,
+            "range_end": None,
+            "mode": None,
+        }
+    row = values[1] + ["", "", "", "", "", ""]
+    return {
+        "requested_at": row[0] or None,
+        "status": row[1] or None,
+        "completed_at": row[2] or None,
+        "range_start": row[3] or None,
+        "range_end": row[4] or None,
+        "mode": row[5] or None,
+    }
 
 
 def set_refresh_status(status, completed_at=None):
