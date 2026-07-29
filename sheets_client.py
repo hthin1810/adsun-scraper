@@ -21,7 +21,7 @@ SCOPES = [
 ]
 
 ZONES_TAB = "Zones"
-ZONES_HEADER = ["name", "points_json", "created_at"]
+ZONES_HEADER = ["name", "points_json", "created_at", "easy_pass"]
 
 PAIR_RULES_TAB = "PairRules"
 PAIR_RULES_HEADER = ["vung_a", "vung_b", "created_at"]
@@ -120,14 +120,19 @@ def list_zones():
             points = json.loads(r["points_json"])
         except Exception:
             continue
-        zones.append({"name": r["name"], "points": points, "created_at": r.get("created_at", "")})
+        zones.append({
+            "name": r["name"],
+            "points": points,
+            "created_at": r.get("created_at", ""),
+            "easy_pass": str(r.get("easy_pass", "")).strip().upper() == "TRUE",
+        })
     return zones
 
 
-def add_zone(name, points, created_at):
+def add_zone(name, points, created_at, easy_pass=False):
     ss = get_spreadsheet()
     ws = get_or_create_worksheet(ss, ZONES_TAB, header=ZONES_HEADER)
-    ws.append_row([name, json.dumps(points, ensure_ascii=False), created_at])
+    ws.append_row([name, json.dumps(points, ensure_ascii=False), created_at, "TRUE" if easy_pass else "FALSE"])
 
 
 def delete_zone(name):
@@ -138,6 +143,23 @@ def delete_zone(name):
         ws.delete_rows(cell.row)
         return True
     return False
+
+
+def set_zone_easy_pass(name, easy_pass):
+    """Bat/tat co "vung de di qua" cho 1 vung DA CO SAN (khong can xoa-tao
+    lai). Vung de di qua: khi tinh Vung A/B, neu 1 nhom diem lien tiep cung
+    vai tro (vd Vung B) co chua vung nay VA CON co it nhat 1 vung KHAC khong
+    phai de-di-qua, thuat toan se uu tien chon vung KHAC do lam diem den
+    thuc su (xem _pick_group_representative trong adsun_daily_report.py) —
+    dung cho truong hop xe phai di ngang qua 1 vung co dinh de toi vung dich
+    that su roi quay lai (vd Fico Cat Lai -> Yamaken Cat Lai -> Fico Cat Lai)."""
+    ss = get_spreadsheet()
+    ws = get_or_create_worksheet(ss, ZONES_TAB, header=ZONES_HEADER)
+    cell = ws.find(name, in_column=1)
+    if not cell:
+        return False
+    ws.update_cell(cell.row, 4, "TRUE" if easy_pass else "FALSE")
+    return True
 
 
 def _autofit_column_requests(ws, dataframe, char_px=9, padding_px=28, min_px=70, max_px=420):

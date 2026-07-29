@@ -210,13 +210,6 @@ def extract_zone_points(df):
 # Fico Cat Lai...) mac dinh la Vung B.
 ANCHOR_EXACT = {"BÃI RẠCH CHIẾC", "BÃI TẬP KẾT"}
 
-# "VLXD BỜM" LUON duoc uu tien chon lam Vung B thuc su neu xuat hien trong 1
-# nhom vai tro B lien tiep — vi duong vao "VLXD BỜM" phai di ngang qua "VLXD
-# DƯƠNG" truoc (va thuong quay lai ngang qua DƯƠNG lan nua khi ra), nen neu
-# chi lay diem CUOI CUNG trong nhom (mac dinh) se de nham thanh DƯƠNG la diem
-# den thuc su thay vi BỜM (da gap thuc te: xe 51M68032 luc 3h32 sang 28/7).
-PRIORITY_B_ZONES = {"VLXD BỜM"}
-
 
 def _name_upper(p):
     return str(p[ZONE_COLUMN]).strip().upper()
@@ -246,24 +239,29 @@ def _pair_touches(points, idx, pair_rules_upper):
     return False
 
 
-def _pick_group_representative(points, i, j):
+def _pick_group_representative(points, i, j, easy_pass_zones):
     """Chon diem dai dien cho 1 nhom vai tro lien tiep points[i..j]: uu tien
-    diem nao thuoc PRIORITY_B_ZONES (vd "VLXD BỜM") neu co trong nhom, neu
-    khong moi lay diem CUOI CUNG nhu mac dinh."""
-    for k in range(i, j + 1):
-        if _name_upper(points[k]) in PRIORITY_B_ZONES:
-            return points[k]
-    return points[j]
+    diem KHONG thuoc easy_pass_zones ("vung de di qua", danh dau tren tab Ve
+    vung) neu nhom co it nhat 1 diem nhu vay — vd nhom [FICO CÁT LÁI,
+    YAMAKEN CÁT LÁI, FICO CÁT LÁI] voi FICO CÁT LÁI duoc danh dau "de di qua"
+    se chon YAMAKEN CÁT LÁI lam diem dai dien, vi FICO chi la diem BUOC PHAI
+    di ngang qua de toi/roi khoi YAMAKEN roi quay ve. Neu CA NHOM chi toan
+    vung de-di-qua (vd xe chi ghe DUY NHAT vung do roi quay ve, khong ghe
+    vung nao khac xen giua), van chon diem CUOI CUNG nhu binh thuong — luc
+    nay chinh no moi la diem dung that su."""
+    non_pass = [k for k in range(i, j + 1) if _name_upper(points[k]) not in easy_pass_zones]
+    candidates = non_pass if non_pass else list(range(i, j + 1))
+    return points[candidates[-1]]
 
 
-def _collapse_runs(points, pair_rules_upper):
+def _collapse_runs(points, pair_rules_upper, easy_pass_zones):
     """Gop cac diem LIEN TIEP cung vai tro mac dinh (A voi A, B voi B) thanh 1
-    diem duy nhat (giu diem CUOI CUNG trong nhom, TRU KHI nhom co diem thuoc
-    PRIORITY_B_ZONES — xem _pick_group_representative) — vi du xe di ngang
-    qua nhieu vung dich lien tiep truoc khi quay lai dung vung neo xuat phat,
-    chi vung dich CUOI cung truoc khi quay lai moi la diem dung that su. Cac
-    diem la "diem noi" (hinge — hoac bi ep dong vai B nhu BÃI TẬP KẾT sau MỎ,
-    hoac la 1 dau cua cap tuy chinh) khong bao gio bi gop, luon dung rieng le."""
+    diem duy nhat (xem _pick_group_representative de biet cach chon diem dai
+    dien trong nhom) — vi du xe di ngang qua nhieu vung dich lien tiep truoc
+    khi quay lai dung vung neo xuat phat, chi vung dich THAT SU (khong phai
+    vung "de di qua") moi la diem dung that su. Cac diem la "diem noi" (hinge
+    — hoac bi ep dong vai B nhu BÃI TẬP KẾT sau MỎ, hoac la 1 dau cua cap tuy
+    chinh) khong bao gio bi gop, luon dung rieng le."""
     reduced = []
     n = len(points)
     i = 0
@@ -289,40 +287,12 @@ def _collapse_runs(points, pair_rules_upper):
             if nxt_boundary or nxt_role != role:
                 break
             j += 1
-        reduced.append(_pick_group_representative(points, i, j))
+        reduced.append(_pick_group_representative(points, i, j, easy_pass_zones))
         i = j + 1
     return reduced
 
 
-HOANG_THINH_NAME = "HOÀNG THỊNH RẠCH CHIẾC"
-
-
-def _is_anchor_neighbor(name_upper):
-    return name_upper is not None and (name_upper.startswith("MỎ") or name_upper in ANCHOR_EXACT)
-
-
-def _filter_hoang_thinh_noise(points):
-    """HOÀNG THỊNH RẠCH CHIẾC nam rat gan BÃI RẠCH CHIẾC ve toa do, de bi
-    nham la 1 diem dung that su trong khi thuc ra chi la nhieu GPS luc xe
-    dang di ngang qua khu vuc do tren duong toi/roi 1 vung khac (da gap thuc
-    te: an mat mot luot ghe FICO MAI CHÍ THỌ ngay 24/7 vi HOÀNG THỊNH xen vao
-    ngay sau do). Chi cong nhan la diem dung THAT SU neu CA HAI diem lien ke
-    (ngay truoc va ngay sau no trong day diem) deu la vung neo (MỎ*/BÃI TẬP
-    KẾT/BÃI RẠCH CHIẾC) — neu khong, loai bo hoan toan khoi day diem (nhu
-    chua tung xuat hien), tranh no "an" mat diem den that su ke ben."""
-    n = len(points)
-    result = []
-    for i, p in enumerate(points):
-        if _name_upper(p) == HOANG_THINH_NAME:
-            prev_upper = _name_upper(points[i - 1]) if i > 0 else None
-            next_upper = _name_upper(points[i + 1]) if i + 1 < n else None
-            if not (_is_anchor_neighbor(prev_upper) and _is_anchor_neighbor(next_upper)):
-                continue
-        result.append(p)
-    return result
-
-
-def build_transition_rows(points, plate, pair_rules=None):
+def build_transition_rows(points, plate, pair_rules=None, easy_pass_zones=None):
     """Tao cac dong chuyen vung A->B tu day diem vung da loc (xem
     _collapse_runs de biet buoc gop truoc). Duyet day da gop, giu 1 "diem dang
     mo" (ung vien Vung A):
@@ -335,9 +305,8 @@ def build_transition_rows(points, plate, pair_rules=None):
         khi no se "mo lai" duoc (bi ep dong vai B nhu BÃI TẬP KẾT, hoac la dau
         A cua 1 cap tuy chinh voi diem ke tiep) — neu khong thi dong lai (ve
         vung neo, khong ghi)."""
-    points = _filter_hoang_thinh_noise(points)
     pair_rules_upper = {(a.strip().upper(), b.strip().upper()) for a, b in (pair_rules or [])}
-    reduced = _collapse_runs(points, pair_rules_upper)
+    reduced = _collapse_runs(points, pair_rules_upper, easy_pass_zones or set())
 
     rows = []
     open_point = None
@@ -390,7 +359,9 @@ def build_transition_rows(points, plate, pair_rules=None):
     return rows
 
 
-def process_vehicle_dataframe(plate, df, window_start, window_end, zone_polygons=None, pair_rules=None):
+def process_vehicle_dataframe(
+    plate, df, window_start, window_end, zone_polygons=None, pair_rules=None, easy_pass_zones=None
+):
     """Tinh Vung + tao cac dong chuyen vung cho 1 xe TU TOAN BO du lieu ping
     truyen vao (KHONG loc theo khung gio truoc khi tinh), roi CHI LOC CAC
     DONG KET QUA (transition) theo "Thời điểm A" nam trong [window_start,
@@ -422,11 +393,11 @@ def process_vehicle_dataframe(plate, df, window_start, window_end, zone_polygons
         df = zone_matching.compute_zone_column(df, zone_polygons)
 
     points = extract_zone_points(df)
-    rows = build_transition_rows(points, plate, pair_rules)
+    rows = build_transition_rows(points, plate, pair_rules, easy_pass_zones)
     return [r for r in rows if window_start <= r["Thời điểm A"] < window_end]
 
 
-def merge_reports(results, window_start, window_end, zone_polygons=None, pair_rules=None):
+def merge_reports(results, window_start, window_end, zone_polygons=None, pair_rules=None, easy_pass_zones=None):
     all_rows = []
     for plate, raw_path in results:
         if raw_path is None or raw_path == "ERROR":
@@ -437,7 +408,9 @@ def merge_reports(results, window_start, window_end, zone_polygons=None, pair_ru
             print(f"  [{plate}] LỖI khi đọc file tạm {raw_path.name}: {e}", file=sys.stderr)
             continue
 
-        all_rows.extend(process_vehicle_dataframe(plate, df, window_start, window_end, zone_polygons, pair_rules))
+        all_rows.extend(
+            process_vehicle_dataframe(plate, df, window_start, window_end, zone_polygons, pair_rules, easy_pass_zones)
+        )
 
     if not all_rows:
         return None
@@ -565,13 +538,21 @@ def main():
         pair_rules = []
         print(f"Không tải được danh sách cặp vùng tùy chỉnh ({e}).", file=sys.stderr)
 
+    try:
+        easy_pass_zones = zone_matching.load_easy_pass_zones()
+        if easy_pass_zones:
+            print(f"Đã tải {len(easy_pass_zones)} vùng \"dễ đi qua\".")
+    except Exception as e:
+        easy_pass_zones = set()
+        print(f"Không tải được danh sách vùng \"dễ đi qua\" ({e}).", file=sys.stderr)
+
     # Chi nhung xe QUET THANH CONG lan nay (co du lieu hoac xac nhan khong co
     # du lieu that su) moi duoc phep thay du lieu cu — xe bi loi ("ERROR")
     # se duoc GIU NGUYEN du lieu cu, khong bi xoa mat (xem upsert_split_by_month).
     successful_plates = {plate for plate, status in results if status != "ERROR"}
 
     print("Đang gộp và lọc dữ liệu theo đúng khung giờ...")
-    merged = merge_reports(results, window_start, window_end, zone_polygons, pair_rules)
+    merged = merge_reports(results, window_start, window_end, zone_polygons, pair_rules, easy_pass_zones)
 
     if merged is None or merged.empty:
         print("Không có dữ liệu hành trình nào trong khung thời gian này cho toàn bộ xe.")

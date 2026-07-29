@@ -28,6 +28,15 @@ def load_zone_polygons():
     return polygons
 
 
+def load_easy_pass_zones():
+    """Tra ve set TEN VIET HOA cac vung duoc danh dau "de di qua" (xem
+    sheets_client.set_zone_easy_pass, dat tren tab Ve vung) — dung khi gom
+    nhom cac diem cung vai tro lien tiep de chon diem dai dien thuc su (xem
+    adsun_daily_report._pick_group_representative)."""
+    zones = sheets_client.list_zones()
+    return {z["name"].strip().upper() for z in zones if z.get("easy_pass")}
+
+
 def find_zone(lat, lon, polygons):
     point = Point(lon, lat)
     for name, poly in polygons:
