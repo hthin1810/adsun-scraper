@@ -32,7 +32,14 @@ def load_config():
         return json.load(f)
 
 
+_client_cache = None
+_spreadsheet_cache = {}  # sheet_id -> Spreadsheet, giu lai suot vong doi tien trinh
+
+
 def get_client():
+    global _client_cache
+    if _client_cache is not None:
+        return _client_cache
     config = load_config()
     creds_path = Path(config["credentials_path"])
     if not creds_path.is_absolute():
@@ -45,7 +52,24 @@ def get_client():
             "Cần tải file service account JSON từ Google Cloud Console."
         )
     creds = Credentials.from_service_account_file(str(creds_path), scopes=SCOPES)
-    return gspread.authorize(creds)
+    _client_cache = gspread.authorize(creds)
+    return _client_cache
+
+
+def _open_by_key_cached(sheet_id):
+    """Mo spreadsheet theo id va GIU LAI trong bo nho suot vong doi tien
+    trinh, khong mo lai tu dau moi lan goi. Truoc day get_client() +
+    open_by_key() bi goi lai tu dau O MOI HAM trong file nay — day chinh la
+    nguyen nhan khien moi thao tac (vd luu 1 dong tick/ghi chu) ton 2-3 giay
+    du chi doc/ghi 1 dong rat nho, vi phan xac thuc + mo spreadsheet ton
+    nhieu thoi gian hon han chinh thao tac do. Voi script chay 1 lan roi
+    thoat (backfill_month.py, refresh_range.py...) cache nay van co loi (vi
+    ho cung goi nhieu ham trong cung 1 lan chay), khong phat sinh rui ro gi
+    them (tab/spreadsheet chi bi doc lai object, khong anh huong du lieu)."""
+    if sheet_id not in _spreadsheet_cache:
+        client = get_client()
+        _spreadsheet_cache[sheet_id] = client.open_by_key(sheet_id)
+    return _spreadsheet_cache[sheet_id]
 
 
 def get_spreadsheet():
@@ -53,8 +77,7 @@ def get_spreadsheet():
     sheet_id = config.get("sheet_id")
     if not sheet_id:
         raise RuntimeError("Chưa cấu hình sheet_id trong config.json.")
-    client = get_client()
-    return client.open_by_key(sheet_id)
+    return _open_by_key_cached(sheet_id)
 
 
 def get_report_spreadsheet():
@@ -64,8 +87,7 @@ def get_report_spreadsheet():
     sheet_id = config.get("report_sheet_id")
     if not sheet_id:
         raise RuntimeError("Chưa cấu hình report_sheet_id trong config.json.")
-    client = get_client()
-    return client.open_by_key(sheet_id)
+    return _open_by_key_cached(sheet_id)
 
 
 def create_report_spreadsheet(title, share_email):
@@ -187,11 +209,29 @@ def _write_full_tab(ss, ws, dataframe):
     ss.batch_update({"requests": _autofit_column_requests(ws, dataframe)})
 
 
-def upsert_range_report(tab_name, range_start, range_end, new_dataframe, time_column="Thời điểm A"):
+def upsert_range_report(
+    tab_name,
+    range_start,
+    range_end,
+    new_dataframe,
+    time_column="Thời điểm A",
+    plate_column="Biển số xe",
+    only_replace_plates=None,
+):
     """Cap nhat 1 tab (thuong dat ten theo thang, vd '2026-07') bang cach CHI
     THAY du lieu co time_column nam trong [range_start, range_end) — giu
     nguyen toan bo du lieu cac ngay/gio khac da co san trong tab do. Phu hop
     de chay lap lai (moi gio) ma khong can quet/ghi lai toan bo thang.
+
+    only_replace_plates (tuy chon, mot tap bien so xe): neu duoc truyen, CHI
+    thay du lieu cua NHUNG XE DO trong khoang thoi gian — du lieu cua cac xe
+    KHAC (vd 1 xe bi loi khi quet, khong nam trong tap nay) van duoc GIU
+    NGUYEN du cung nam trong khoang [range_start, range_end). Bat buoc phai
+    dung tham so nay bat cu khi nao co kha nang 1 vai xe bi loi/bo qua giua
+    chung — neu khong, du lieu cu cua nhung xe do se bi XOA MAT thay vi giu
+    nguyen (day chinh la nguyen nhan gay mat du lieu that su xay ra ngay
+    27/7 — 1 xe loi khi quet backfill ca thang lam xoa mat du lieu ca thang
+    cua xe do).
 
     Viec doc + ghi lai ca tab la 1 API call re (vai tram/nghin dong van nhanh);
     phan TON THOI GIAN THAT (quet Adsun bang trinh duyet) chi gioi han trong
@@ -216,7 +256,12 @@ def upsert_range_report(tab_name, range_start, range_end, new_dataframe, time_co
             t = pd.to_datetime(r[time_column])
         except Exception:
             continue
-        if not (range_start <= t < range_end):
+        in_range = range_start <= t < range_end
+        if not in_range:
+            kept_rows.append(r)
+        elif only_replace_plates is not None and r.get(plate_column) not in only_replace_plates:
+            # Xe nay KHONG nam trong danh sach duoc phep thay lan nay (vd bi
+            # loi khi quet) — giu nguyen dong cu, khong xoa.
             kept_rows.append(r)
 
     if kept_rows:
@@ -235,20 +280,30 @@ def upsert_range_report(tab_name, range_start, range_end, new_dataframe, time_co
 
 
 REFRESH_TAB = "RefreshRequest"
-REFRESH_HEADER = ["requested_at", "status", "completed_at"]
+REFRESH_HEADER = ["requested_at", "status", "completed_at", "range_start", "range_end", "mode"]
 
 
-def request_refresh():
+def request_refresh(range_start=None, range_end=None, mode="scrape"):
     """Ghi 1 yeu cau 'Cap nhat ngay' — bat ke nguoi dung dang mo web qua link
     local (Cloudflare Tunnel) hay link PythonAnywhere, ca 2 deu ghi vao CHUNG
     1 Google Sheet nay. Tien trinh theo doi tren may local (refresh_watcher.py,
     chay moi 1 phut qua Task Scheduler) se phat hien va kich hoat quet ngay,
     vi viec quet Adsun (Playwright) chi chay duoc tren may local co trinh
-    duyet, khong chay duoc tren PythonAnywhere."""
+    duyet, khong chay duoc tren PythonAnywhere.
+
+    range_start/range_end (chuoi "YYYY-MM-DD HH:MM", tuy chon): neu co, chi
+    lam moi DUNG khoang thoi gian do (nhanh hon, giup sua dung cho nhung
+    khoang bi loi/thieu ma khong can quet lai ca ngay/ca thang). Neu bo trong,
+    mac dinh lam moi theo cua so cap nhat thong thuong (xem adsun_daily_report.py).
+
+    mode: "scrape" (mac dinh) — quet du lieu MOI tu Adsun. "recompute" — KHONG
+    quet Adsun, chi tinh lai Vung A/B cho toan bo du lieu DA CO san trong cache
+    bang danh sach vung/cap vung MOI NHAT (dung khi vua them/sua vung tren ban
+    do, nhanh hon nhieu vi khong can dang nhap/quet gi ca)."""
     ss = get_report_spreadsheet()
     ws = get_or_create_worksheet(ss, REFRESH_TAB, header=REFRESH_HEADER)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    ws.update("A2:C2", [[now, "pending", ""]])
+    ws.update("A2:F2", [[now, "pending", "", range_start or "", range_end or "", mode or "scrape"]])
     return now
 
 
@@ -257,9 +312,23 @@ def get_refresh_status():
     ws = get_or_create_worksheet(ss, REFRESH_TAB, header=REFRESH_HEADER)
     values = ws.get_all_values()
     if len(values) < 2:
-        return {"requested_at": None, "status": None, "completed_at": None}
-    row = values[1] + ["", "", ""]
-    return {"requested_at": row[0] or None, "status": row[1] or None, "completed_at": row[2] or None}
+        return {
+            "requested_at": None,
+            "status": None,
+            "completed_at": None,
+            "range_start": None,
+            "range_end": None,
+            "mode": None,
+        }
+    row = values[1] + ["", "", "", "", "", ""]
+    return {
+        "requested_at": row[0] or None,
+        "status": row[1] or None,
+        "completed_at": row[2] or None,
+        "range_start": row[3] or None,
+        "range_end": row[4] or None,
+        "mode": row[5] or None,
+    }
 
 
 def set_refresh_status(status, completed_at=None):
@@ -298,53 +367,103 @@ def get_annotations():
     return result
 
 
-def set_annotation(row_key, ticked=None, note=None, colors=None):
-    """Cap nhat 1 hoac nhieu truong chu thich cho 1 row_key (tao moi neu chua
-    co). `colors` la dict {ten_cot: ma_mau_hoac_None} — gop vao mau da co san,
-    None nghia la xoa mau cot do.
+_annotation_row_cache = {}  # row_key -> so dong tren sheet (1-indexed), cache trong bo nho tien trinh
 
-    Dung ws.find() de tim DUNG 1 dong can sua thay vi doc toan bo tab (nhu
-    truoc) — vi ham nay chay MOI LAN nguoi dung tick/to mau/go ghi chu 1 o
-    tren web, doc ca ngan dong chi de sua 1 dong se cham dan khi tab lon len
-    theo thoi gian."""
+
+def set_annotation(row_key, ticked=False, note="", colors=None):
+    """Ghi DE TOAN BO 1 dong chu thich (khong doc-hop-nhat truoc nua) — trinh
+    duyet (web) da tu gop du lieu day du (ticked/note/colors) o phia client
+    truoc khi goi ham nay. Lan luu DAU TIEN cho 1 row_key can 1 lan doc
+    (ws.find) + 1 lan ghi; TU LAN THU 2 tro di cho CUNG row_key (vd go ghi
+    chu roi xoa ngay sau do), nho vi tri dong da cache tu lan truoc nen CHI
+    can 1 lan ghi — giam gan mot nua do tre so voi truoc (3 lan goi: find +
+    row_values + update). Cache an toan vi tab nay CHI append/update tai
+    cho, khong bao gio xoa/sap xep lai dong."""
     ss = get_report_spreadsheet()
     ws = get_or_create_worksheet(ss, ANNOTATIONS_TAB, header=ANNOTATIONS_HEADER)
 
-    cell = ws.find(row_key, in_column=1)
-    current = {"ticked": False, "note": "", "colors": {}}
-    if cell:
-        existing = ws.row_values(cell.row)
-        if len(existing) > 1:
-            current["ticked"] = str(existing[1]).strip().upper() == "TRUE"
-        if len(existing) > 2:
-            current["note"] = existing[2]
-        if len(existing) > 3:
-            try:
-                current["colors"] = json.loads(existing[3] or "{}")
-            except Exception:
-                current["colors"] = {}
-
-    if ticked is not None:
-        current["ticked"] = bool(ticked)
-    if note is not None:
-        current["note"] = note
-    if colors:
-        current["colors"].update(colors)
-        current["colors"] = {k: v for k, v in current["colors"].items() if v}
-
+    colors = {k: v for k, v in (colors or {}).items() if v}
     row_values = [
         row_key,
-        "TRUE" if current["ticked"] else "FALSE",
-        current["note"],
-        json.dumps(current["colors"], ensure_ascii=False),
+        "TRUE" if ticked else "FALSE",
+        note or "",
+        json.dumps(colors, ensure_ascii=False),
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     ]
 
+    cached_row = _annotation_row_cache.get(row_key)
+    if cached_row is not None:
+        ws.update(f"A{cached_row}:E{cached_row}", [row_values])
+        return {"ticked": bool(ticked), "note": note or "", "colors": colors}
+
+    cell = ws.find(row_key, in_column=1)
     if cell is None:
-        ws.append_row(row_values)
+        resp = ws.append_row(row_values)
+        try:
+            updated_range = resp["updates"]["updatedRange"]
+            row_num = int(re.search(r"(\d+)", updated_range.split("!")[-1]).group(1))
+            _annotation_row_cache[row_key] = row_num
+        except Exception:
+            pass
     else:
         ws.update(f"A{cell.row}:E{cell.row}", [row_values])
-    return current
+        _annotation_row_cache[row_key] = cell.row
+    return {"ticked": bool(ticked), "note": note or "", "colors": colors}
+
+
+def set_annotations_batch(items):
+    """Ghi NHIEU dong chu thich CUNG LUC bang so luot goi Sheets API IT NHAT
+    co the (toi da 3 luot: 1 doc + 1 batch-update + 1 batch-append, BAT KE
+    dang xoa/dan bao nhieu o) — dung khi web goi hang loat (vd Backspace tren
+    1 vung chon lon, hoac dan nhieu o cung luc). Neu goi set_annotation()
+    rieng le cho tung dong trong truong hop nay, hang chuc request chay gan
+    nhu dong thoi se de vuot gioi han so luot GHI/phut cua Google Sheets
+    API, khien 1 phan thay doi bi loi am tham — day chinh la nguyen nhan gay
+    ra loi thuc te "xoa het, mot hoi sau van hien lai" (vi thuc ra chua bao
+    gio luu duoc, chi la giao dien hien thi da xoa tam thoi).
+
+    items: list cac dict {row_key, ticked, note, colors}."""
+    if not items:
+        return
+
+    ss = get_report_spreadsheet()
+    ws = get_or_create_worksheet(ss, ANNOTATIONS_TAB, header=ANNOTATIONS_HEADER)
+
+    existing_values = ws.get_all_values()
+    row_of_key = {row[0]: i + 1 for i, row in enumerate(existing_values) if row}  # 1-indexed
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    range_updates = []
+    new_rows = []
+    next_new_row_num = len(existing_values) + 1
+
+    for item in items:
+        row_key = str(item.get("row_key") or "").strip()
+        if not row_key:
+            continue
+        colors = {k: v for k, v in (item.get("colors") or {}).items() if v}
+        row_values = [
+            row_key,
+            "TRUE" if item.get("ticked") else "FALSE",
+            item.get("note") or "",
+            json.dumps(colors, ensure_ascii=False),
+            now,
+        ]
+        row_num = row_of_key.get(row_key)
+        if row_num:
+            range_updates.append({"range": f"A{row_num}:E{row_num}", "values": [row_values]})
+        else:
+            new_rows.append(row_values)
+            # Phong khi 2 item trong CUNG 1 batch trung row_key (vd du lieu
+            # thua) — gan tam vi tri de item sau dung update thay vi them
+            # them 1 dong moi nua.
+            row_of_key[row_key] = next_new_row_num
+            next_new_row_num += 1
+
+    if range_updates:
+        ws.batch_update(range_updates)
+    if new_rows:
+        ws.append_rows(new_rows)
 
 
 MONTH_TAB_RE = re.compile(r"^\d{4}-\d{2}$")
