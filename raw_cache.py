@@ -1,15 +1,23 @@
 """
-Cache du lieu GPS tho (tung ngay/tung xe) ra file Excel tren may, vi du lieu
-cua 1 NGAY DA QUA la vinh vien khong doi. Nho vay khi can tinh lai Vung A/B
-(vi vua them vung moi), neu ca thang da co san trong cache thi CHI can doc
-lai file Excel + chay Python thuan (khong can mo trinh duyet, khong can doi
-Adsun xu ly) — nhanh hon rat nhieu so voi quet lai tu dau.
+Cache du lieu GPS tho (tung ngay/tung xe) ra file Excel, vi du lieu cua 1
+NGAY DA QUA la vinh vien khong doi. Nho vay khi can tinh lai Vung A/B (vi vua
+them vung moi), neu ca thang da co san trong cache thi CHI can doc lai file
+Excel + chay Python thuan (khong can mo trinh duyet, khong can doi Adsun xu
+ly) — nhanh hon rat nhieu so voi quet lai tu dau.
 
-Cau truc: raw_cache/{bien_so}/{YYYY-MM-DD}.xlsx (moi file la du lieu tho cua
-DUNG 1 xe, DUNG 1 ngay). Ngay "hom nay" (chua ket thuc, con thay doi) khong
-bao gio duoc cache.
-"""
+Cau truc (may local): raw_cache/{bien_so}/{YYYY-MM-DD}.xlsx (moi file la du
+lieu tho cua DUNG 1 xe, DUNG 1 ngay). Ngay "hom nay" (chua ket thuc, con thay
+doi) khong bao gio duoc cache.
 
+KHI CHAY TREN GITHUB ACTIONS (bien moi truong GITHUB_ACTIONS="true", GitHub
+tu dong thiet lap): moi lan chay la 1 may ao HOAN TOAN MOI, khong con o dia
+rieng giu lai giua cac lan chay — nen cac ham duoi day TU DONG chuyen sang
+doc/ghi qua Google Drive (xem drive_cache.py, dung chung service account voi
+Google Sheets) thay vi o dia local. Cac noi goi (recompute_zones.py,
+refresh_range.py, backfill_month.py, adsun_daily_report.py) khong can doi gi
+ca, van goi dung cac ham nay nhu binh thuong."""
+
+import os
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -17,6 +25,8 @@ import pandas as pd
 
 CACHE_DIR = Path(__file__).parent / "raw_cache"
 TIME_COLUMN = "Thời điểm"
+
+_USE_DRIVE = os.environ.get("GITHUB_ACTIONS", "").strip().lower() == "true"
 
 
 def cache_path(plate, day: date) -> Path:
@@ -36,6 +46,9 @@ def split_by_calendar_day(df: pd.DataFrame, time_column=TIME_COLUMN):
 def save_day_cache(plate, day: date, day_df: pd.DataFrame):
     """Ghi cache cho 1 (xe, ngay) NEU CHUA CO SAN — du lieu ngay da qua la
     khong doi nen khong can ghi de lai."""
+    if _USE_DRIVE:
+        import drive_cache
+        return drive_cache.save_day_cache(plate, day, day_df)
     path = cache_path(plate, day)
     if path.exists():
         return False
@@ -57,6 +70,9 @@ def cache_complete_past_days(plate, df: pd.DataFrame, today: date, time_column=T
 
 
 def get_cached_dates(plate):
+    if _USE_DRIVE:
+        import drive_cache
+        return drive_cache.get_cached_dates(plate)
     plate_dir = CACHE_DIR / plate
     if not plate_dir.exists():
         return set()
@@ -76,6 +92,9 @@ def _is_valid_date(s):
 def load_cached_range(plate, start_date: date, end_date_exclusive: date):
     """Doc toan bo cache cua 1 xe trong [start_date, end_date_exclusive).
     Tra ve (DataFrame gop, set cac ngay CON THIEU trong khoang do)."""
+    if _USE_DRIVE:
+        import drive_cache
+        return drive_cache.load_cached_range(plate, start_date, end_date_exclusive)
     frames = []
     missing = set()
     d = start_date
