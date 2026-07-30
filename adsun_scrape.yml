@@ -1,0 +1,47 @@
+name: Adsun Hourly Scrape
+
+on:
+  schedule:
+    - cron: "5 * * * *"   # phut thu 5 cua MOI GIO (gio UTC)
+  workflow_dispatch: {}    # cho phep bam "Run workflow" thu cong tren GitHub
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Install Python packages
+        run: pip install -r requirements.txt
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-chromium-${{ hashFiles('requirements.txt') }}
+
+      - name: Install Playwright Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Reconstruct Google service account credentials
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+        run: echo "$GOOGLE_CREDENTIALS_JSON" > google_credentials.json
+
+      - name: Run scraper
+        env:
+          ADSUN_USER: ${{ secrets.ADSUN_USER }}
+          ADSUN_PASS: ${{ secrets.ADSUN_PASS }}
+        run: python adsun_daily_report.py
