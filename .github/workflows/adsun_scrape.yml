@@ -55,10 +55,15 @@ jobs:
         env:
           ADSUN_USER: ${{ secrets.ADSUN_USER }}
           ADSUN_PASS: ${{ secrets.ADSUN_PASS }}
+          DRIVE_OAUTH_JSON: ${{ secrets.DRIVE_OAUTH_JSON }}
+          MODE: ${{ github.event.inputs.mode }}
           RANGE_START: ${{ github.event.inputs.range_start }}
           RANGE_END: ${{ github.event.inputs.range_end }}
         run: |
-          if [ -n "$RANGE_START" ] && [ -n "$RANGE_END" ]; then
+          if [ "$MODE" = "recompute" ]; then
+            echo "Chay recompute_zones.py (tinh lai vung tu cache tren Google Drive, khong quet Adsun)"
+            python recompute_zones.py
+          elif [ -n "$RANGE_START" ] && [ -n "$RANGE_END" ]; then
             echo "Chay refresh_range.py cho khoang: $RANGE_START -> $RANGE_END"
             python refresh_range.py --from "$RANGE_START" --to "$RANGE_END"
           else
