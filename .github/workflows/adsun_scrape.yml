@@ -2,13 +2,24 @@ name: Adsun Hourly Scrape
 
 on:
   schedule:
-    - cron: "5 * * * *"
-  workflow_dispatch: {}
+    - cron: "5 * * * *"   # phut thu 5 cua MOI GIO (gio UTC)
+  workflow_dispatch:       # cho phep bam "Run workflow" thu cong tren GitHub,
+    inputs:                # hoac web app tu kich hoat qua GitHub API (xem
+      mode:                 # github_dispatch.py) khi bam "Cap nhat ngay" /
+        description: "scrape (mac dinh) hoac recompute"   # "Cap nhat theo khoang"
+        required: false
+        default: "scrape"
+      range_start:
+        description: "YYYY-MM-DD HH:MM (tuy chon — de trong = cua so binh thuong)"
+        required: false
+      range_end:
+        description: "YYYY-MM-DD HH:MM (tuy chon, phai di kem range_start)"
+        required: false
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -44,4 +55,13 @@ jobs:
         env:
           ADSUN_USER: ${{ secrets.ADSUN_USER }}
           ADSUN_PASS: ${{ secrets.ADSUN_PASS }}
-        run: python adsun_daily_report.py
+          RANGE_START: ${{ github.event.inputs.range_start }}
+          RANGE_END: ${{ github.event.inputs.range_end }}
+        run: |
+          if [ -n "$RANGE_START" ] && [ -n "$RANGE_END" ]; then
+            echo "Chay refresh_range.py cho khoang: $RANGE_START -> $RANGE_END"
+            python refresh_range.py --from "$RANGE_START" --to "$RANGE_END"
+          else
+            echo "Chay adsun_daily_report.py (cua so binh thuong)"
+            python adsun_daily_report.py
+          fi
