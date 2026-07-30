@@ -240,6 +240,34 @@ def cache_complete_past_days(plate, df: pd.DataFrame, today: date, time_column=T
     return cached_count
 
 
+def list_cached_plates():
+    """Tra ve danh sach ten cac thu muc con (bien so xe) trong thu muc goc
+    AdsunRawCache tren Drive."""
+    root = _root_folder_id()
+    plates = []
+    page_token = None
+    while True:
+        params = {
+            "q": f"'{root}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+            "fields": "nextPageToken, files(id,name)",
+            "pageSize": 1000,
+            "includeItemsFromAllDrives": "true",
+            "supportsAllDrives": "true",
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        r = requests.get(API_FILES, headers=_headers(), params=params, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        for f in data.get("files", []):
+            plates.append(f["name"])
+            _folder_id_cache[f["name"]] = f["id"]
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    return sorted(plates)
+
+
 def get_cached_dates(plate):
     files = _list_plate_files(plate)
     result = set()

@@ -26,15 +26,9 @@ import zone_matching
 from adsun_daily_report import FINAL_COLUMNS, process_vehicle_dataframe, upsert_split_by_month
 
 
-def list_cached_plates():
-    if not raw_cache.CACHE_DIR.exists():
-        return []
-    return sorted(p.name for p in raw_cache.CACHE_DIR.iterdir() if p.is_dir())
-
-
 def main():
     today = date.today()
-    plates = list_cached_plates()
+    plates = raw_cache.list_cached_plates()
     if not plates:
         print("Không có dữ liệu cache nào để tính lại.", file=sys.stderr)
         sys.exit(1)

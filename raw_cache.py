@@ -69,6 +69,16 @@ def cache_complete_past_days(plate, df: pd.DataFrame, today: date, time_column=T
     return cached_count
 
 
+def list_cached_plates():
+    """Tra ve danh sach ten cac bien so xe DA CO cache (thu muc con)."""
+    if _USE_DRIVE:
+        import drive_cache
+        return drive_cache.list_cached_plates()
+    if not CACHE_DIR.exists():
+        return []
+    return sorted(p.name for p in CACHE_DIR.iterdir() if p.is_dir())
+
+
 def get_cached_dates(plate):
     if _USE_DRIVE:
         import drive_cache
