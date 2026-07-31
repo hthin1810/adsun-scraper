@@ -2,7 +2,7 @@ name: Adsun Hourly Scrape
 
 on:
   schedule:
-    - cron: "5 * * * *"   # phut thu 5 cua MOI GIO (gio UTC)
+    - cron: "23 * * * *"   # phut thu 23 cua MOI GIO (gio UTC) — tranh dau gio (phut 0-10) la luc GitHub de bi tre lich nhat
   workflow_dispatch:       # cho phep bam "Run workflow" thu cong tren GitHub,
     inputs:                # hoac web app tu kich hoat qua GitHub API (xem
       mode:                 # github_dispatch.py) khi bam "Cap nhat ngay" /
