@@ -104,19 +104,21 @@ REPORT_COLUMNS = [
 ]
 
 
-ROLLING_WINDOW_HOURS = 2
+ROLLING_WINDOW_HOURS = 3
 
 
 def compute_window(now: datetime, rolling_hours=ROLLING_WINDOW_HOURS):
     """Tra ve (now - rolling_hours, now) — cua so "N gio gan nhat" (mac dinh
-    2 gio), KHONG con la ca ngay lam viec tu 8h sang nhu truoc. Ly do doi:
-    moi lan chay (moi 15 phut tren may local, moi gio qua GitHub Actions) se
-    GHI DE lai dung khoang nay — vi cac lan chay lien tiep co khoang trung
-    lap nhau lon (2 gio > chu ky chay), 1 lan bi loi/thieu du lieu (vd su co
-    ghi Google Sheets ngay 27/7) se DUOC TU SUA boi lan chay ke tiep, khong
-    can can thiep thu cong. Cung nhanh hon ro ret so voi xu ly ca ngay lam
-    viec (vd luc 15h chieu se phai xu ly toi 7 tieng du lieu neu con dung
-    kieu cu)."""
+    3 gio, tang tu 2 gio ngay 31/7 de chiu duoc do tre lich cua GitHub Actions
+    — GitHub khong dam bao chay dung gio, doi luc tre vai tieng vao gio cao
+    diem, 2 gio la khong du de tu bu neu gap dung luc do), KHONG con la ca
+    ngay lam viec tu 8h sang nhu truoc. Ly do doi: moi lan chay (moi 15 phut
+    tren may local, khoang moi gio qua GitHub Actions) se GHI DE lai dung
+    khoang nay — vi cac lan chay lien tiep co khoang trung lap nhau lon (3
+    gio > chu ky chay binh thuong), 1 lan bi loi/thieu/tre du lieu se DUOC TU
+    SUA boi lan chay ke tiep, khong can can thiep thu cong. Cung nhanh hon ro
+    ret so voi xu ly ca ngay lam viec (vd luc 15h chieu se phai xu ly toi 7
+    tieng du lieu neu con dung kieu cu)."""
     return now - timedelta(hours=rolling_hours), now
 
 
