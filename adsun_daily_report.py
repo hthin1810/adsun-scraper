@@ -104,22 +104,47 @@ REPORT_COLUMNS = [
 ]
 
 
-ROLLING_WINDOW_HOURS = 3
+ROLLING_WINDOW_HOURS = 24  # xem giai thich trong compute_window() ve ly do can rong toi 24h
+MAX_LOOKBACK_HOURS = 24  # gioi han an toan khi tu dong mo rong cua so bu khoang trong
 
 
-def compute_window(now: datetime, rolling_hours=ROLLING_WINDOW_HOURS):
-    """Tra ve (now - rolling_hours, now) — cua so "N gio gan nhat" (mac dinh
-    3 gio, tang tu 2 gio ngay 31/7 de chiu duoc do tre lich cua GitHub Actions
-    — GitHub khong dam bao chay dung gio, doi luc tre vai tieng vao gio cao
-    diem, 2 gio la khong du de tu bu neu gap dung luc do), KHONG con la ca
-    ngay lam viec tu 8h sang nhu truoc. Ly do doi: moi lan chay (moi 15 phut
-    tren may local, khoang moi gio qua GitHub Actions) se GHI DE lai dung
-    khoang nay — vi cac lan chay lien tiep co khoang trung lap nhau lon (3
-    gio > chu ky chay binh thuong), 1 lan bi loi/thieu/tre du lieu se DUOC TU
-    SUA boi lan chay ke tiep, khong can can thiep thu cong. Cung nhanh hon ro
-    ret so voi xu ly ca ngay lam viec (vd luc 15h chieu se phai xu ly toi 7
-    tieng du lieu neu con dung kieu cu)."""
-    return now - timedelta(hours=rolling_hours), now
+def compute_window(now: datetime, rolling_hours=ROLLING_WINDOW_HOURS, max_lookback_hours=MAX_LOOKBACK_HOURS):
+    """Tra ve (window_start, now). Mac dinh window_start = now - rolling_hours
+    ("N gio gan nhat", hien la 24 gio) — NHUNG se TU DONG MO RONG lui xa hon
+    NEU lan chay dinh ky THANH CONG gan nhat (xem sheets_client.
+    get_last_schedule_checkpoint) cach day LAU HON rolling_hours. Gioi han
+    toi da max_lookback_hours (mac dinh 24 gio) de tranh mo rong vo han neu
+    checkpoint bi hong/chua tung ghi (vd lan dau chay moi) — vuot qua muc do
+    van can dung backfill_month.py/refresh_range.py thu cong nhu truoc.
+
+    Vi sao rolling_hours mac dinh RONG toi 24h (khong chi vai gio): moi dong
+    bao cao chi duoc tinh (va co the bi GHI DE lai) khi "Thời điểm A" (luc
+    RỜI vung neo) nam trong window — nhung 1 chuyen di chi TRO THANH biet
+    duoc (co Thời điểm B) khi xe DEN vung ke tiep, co the CACH RAT XA luc
+    roi vung neo (vd xe roi bai luc 23h dem hom truoc, chay lung tung qua
+    nhieu duong khong co vung ve, mai 4-5 tieng sau moi toi 1 vung co ve —
+    da gap thuc te ngay 4/8, xe 51L97909 roi BÃI TẬP KẾT 23:23 hom truoc,
+    toi MEKONG STAR PHÚ HỮU 04:38 hom sau, cach nhau hon 5 tieng). Neu
+    rolling_hours qua hep (vd 3h), DEN LUC B xay ra thi A da "gia" hon ca
+    do rong cua so, nen KHONG CO LAN CHAY DINH KY NAO (du chay dung gio,
+    khong loi gi ca) co the bat duoc dong nay nua — khac voi truong hop
+    checkpoint o tren (schedule bi tre/dut quang), day la gioi han cau truc
+    xay ra CA KHI schedule chay hoan hao. Vi upsert_range_report doc/ghi
+    LAI CA TAB moi lan (chi phi khong doi du window rong hay hep — xem
+    docstring ham do), mo rong rolling_hours khong ton them chi phi API,
+    nen dat bang luon max_lookback_hours cho an toan toi da."""
+    default_start = now - timedelta(hours=rolling_hours)
+    try:
+        checkpoint = sheets_client.get_last_schedule_checkpoint()
+    except Exception:
+        checkpoint = None
+
+    if checkpoint is not None and checkpoint < default_start:
+        earliest_allowed = now - timedelta(hours=max_lookback_hours)
+        window_start = max(checkpoint, earliest_allowed)
+    else:
+        window_start = default_start
+    return window_start, now
 
 
 def export_all_vehicles(page, raw_dir: Path, range_preset=RAW_RANGE_PRESET):
@@ -521,6 +546,17 @@ def main():
             sys.exit(1)
         finally:
             browser.close()
+
+    # Danh dau "da kiem tra xong toi window_end" NGAY KHI buoc quet thanh
+    # cong (bat ke sau do co du lieu hay khong) — dung lam moc de lan chay
+    # ke tiep tu dong phat hien va bu khoang trong neu gap su co (xem
+    # compute_window). Ghi CANG SOM CANG TOT (truoc khi xu ly Vung/gop du
+    # lieu) de dam bao checkpoint luon phan anh dung "da quet xong", khong
+    # bi anh huong boi loi o cac buoc xu ly phia sau.
+    try:
+        sheets_client.set_last_schedule_checkpoint(window_end)
+    except Exception as e:
+        print(f"Không ghi được checkpoint lịch chạy ({e}).", file=sys.stderr)
 
     try:
         zone_polygons = zone_matching.load_zone_polygons()
