@@ -249,44 +249,70 @@ def fingerprint_df(df, time_column="Thời điểm", coord_column="Tọa độ")
 
 
 def export_vehicle_report(page, plate, range_preset, header_row_index, prev_fingerprint=None, max_attempts=3):
-    """Chon xe + khoang ngay + xem + xuat Excel + doc thanh DataFrame, CO KIEM
-    TRA chong "dinh du lieu xe truoc" (xem fingerprint_df) — neu dau van tay
-    file vua xuat TRUNG HET voi prev_fingerprint (dau van tay cua xe NGAY
-    TRUOC do trong vong lap), tai lai trang va thu lai toi da max_attempts lan
-    truoc khi chiu thua (raise loi, KHONG tra ve du lieu sai de tranh ghi de
-    mat du lieu that cua xe do).
+    """Chon xe + khoang ngay + xem + xuat Excel + doc thanh DataFrame, voi 2
+    lop bao ve chong loi thuc te da gap NHIEU LAN khi quet lien tuc nhieu xe
+    trong 1 phien trinh duyet (dac biet cac xe cuoi danh sach, sau khi da
+    chuyen qua ~10 xe — co ve trang/trinh duyet bi cham/qua tai dan):
+
+    1. Loi ky thuat (vd dropdown "Thiết bị" khong mo kip, timeout cho o
+       trang tai) — bat Exception BAT KY trong ca chuoi chon xe/xem/xuat, tai
+       lai trang va thu lai (KHONG de loi lam hong ca lan quet).
+    2. "Dinh du lieu xe truoc" — server Adsun tra ve file dang xu ly trong
+       hang doi (cua xe TRUOC do) thay vi file MOI vua yeu cau, du giao dien
+       da hien dung xe. Phat hien bang fingerprint_df: neu dau van tay file
+       vua xuat TRUNG HET voi prev_fingerprint (xe ngay truoc trong vong
+       lap), cung tai lai va thu lai.
+
+    Ca 2 truong hop deu thu lai toi da max_attempts lan (moi lan cho them 1
+    chut de trang on dinh) truoc khi chiu thua han (raise loi ro rang, KHONG
+    tra ve du lieu sai/nghi ngo de tranh ghi de mat du lieu that cua xe do).
 
     Tra ve (DataFrame hoac None neu Adsun xac nhan khong co du lieu, fingerprint)."""
-    last_fp = None
+    last_error = None
     for attempt in range(max_attempts):
-        goto_report_page(page)
-        select_vehicle(page, plate)
-        select_date_range(page, range_preset)
-        view_report(page)
-        wait_report_loaded(page, timeout_seconds=300)
-
-        if has_no_data(page):
-            return None, None
-
-        download = export_current_report(page)
-        tmp_path = Path(f"_tmp_verify_{plate}.xlsx")
-        download.save_as(str(tmp_path))
         try:
-            df = pd.read_excel(tmp_path, header=header_row_index)
-        finally:
-            tmp_path.unlink(missing_ok=True)
+            if attempt > 0:
+                page.wait_for_timeout(2000 * attempt)  # cho trang "nghi" truoc khi thu lai
+            goto_report_page(page)
+            select_vehicle(page, plate)
+            select_date_range(page, range_preset)
+            view_report(page)
+            wait_report_loaded(page, timeout_seconds=300)
+
+            if has_no_data(page):
+                return None, None
+
+            download = export_current_report(page)
+            tmp_path = Path(f"_tmp_verify_{plate}.xlsx")
+            download.save_as(str(tmp_path))
+            try:
+                df = pd.read_excel(tmp_path, header=header_row_index)
+            finally:
+                tmp_path.unlink(missing_ok=True)
+        except Exception as e:
+            last_error = e
+            print(
+                f"  [{plate}] Lỗi khi xuất báo cáo ({e}) — thử lại lần "
+                f"{attempt + 2}/{max_attempts}...",
+                file=sys.stderr,
+            )
+            continue
 
         fp = fingerprint_df(df)
-        last_fp = fp
         if fp is None or fp != prev_fingerprint:
             return df, fp
 
+        last_error = None
         print(
             f"  [{plate}] Nghi ngo bi \"dính\" dữ liệu xe trước (dữ liệu xuất ra "
             f"giống hệt) — thử lại lần {attempt + 2}/{max_attempts}...",
             file=sys.stderr,
         )
 
+    if last_error is not None:
+        raise RuntimeError(
+            f"Xuất báo cáo cho {plate} liên tục lỗi sau {max_attempts} lần thử: {last_error}"
+        )
     raise RuntimeError(
         f"Xuất báo cáo cho {plate} liên tục trùng hệt dữ liệu xe trước đó sau "
         f"{max_attempts} lần thử (có thể do server Adsun trả file cũ trong "
