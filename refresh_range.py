@@ -11,7 +11,6 @@ CHAY:
 import argparse
 import sys
 from datetime import date, datetime, timedelta
-from pathlib import Path
 
 import pandas as pd
 from playwright.sync_api import sync_playwright
@@ -20,16 +19,11 @@ import raw_cache
 import sheets_client
 import zone_matching
 from adsun_common import (
+    export_vehicle_report,
     get_credentials,
     goto_report_page,
-    has_no_data,
     list_all_plates,
     login,
-    select_date_range,
-    select_vehicle,
-    view_report,
-    wait_report_loaded,
-    export_current_report,
 )
 from adsun_daily_report import (
     FINAL_COLUMNS,
@@ -58,25 +52,14 @@ def pick_preset(earliest_day: date, today: date):
     return "31"
 
 
-def fetch_vehicle_raw(page, plate, range_preset):
-    goto_report_page(page)
-    select_vehicle(page, plate)
-    select_date_range(page, range_preset)
-    view_report(page)
-    wait_report_loaded(page, timeout_seconds=300)
-    if has_no_data(page):
-        return None
-    download = export_current_report(page)
-    tmp_path = Path(f"_tmp_range_{plate}.xlsx")
-    download.save_as(str(tmp_path))
-    try:
-        df = pd.read_excel(tmp_path, header=HEADER_ROW_INDEX)
-    finally:
-        tmp_path.unlink(missing_ok=True)
-    return df
+def fetch_vehicle_raw(page, plate, range_preset, prev_fingerprint=None):
+    """Wrapper mong quanh adsun_common.export_vehicle_report — xem docstring
+    ham do ve co che chong "dinh" du lieu xe truoc (da gap thuc te nhieu lan,
+    co lan toi 7 xe bi ghi cung 1 du lieu). Tra ve (df, fingerprint_moi)."""
+    return export_vehicle_report(page, plate, range_preset, HEADER_ROW_INDEX, prev_fingerprint)
 
 
-def collect_vehicle_data(page, plate, day_start: date, day_end_inclusive: date, preset):
+def collect_vehicle_data(page, plate, day_start: date, day_end_inclusive: date, preset, prev_fingerprint=None):
     """Tra ve DataFrame gop du lieu cho vehicle trong khoang ngay lich (ca
     hai dau), uu tien dung cache, chi quet Adsun neu con thieu ngay nao
     (khong tinh 'hom nay' — luon phai quet tuoi vi con thay doi).
@@ -93,7 +76,7 @@ def collect_vehicle_data(page, plate, day_start: date, day_end_inclusive: date, 
     missing_excluding_today = missing - {today}
 
     if missing_excluding_today:
-        fresh_df = fetch_vehicle_raw(page, plate, preset)
+        fresh_df, prev_fingerprint = fetch_vehicle_raw(page, plate, preset, prev_fingerprint)
         if fresh_df is not None:
             n = raw_cache.cache_complete_past_days(plate, fresh_df, today)
             if n:
@@ -102,10 +85,11 @@ def collect_vehicle_data(page, plate, day_start: date, day_end_inclusive: date, 
 
     frames = [cached_df] if not cached_df.empty else []
     if today < range_end_exclusive:
-        fresh = fetch_vehicle_raw(page, plate, "hom-nay")
+        fresh, prev_fingerprint = fetch_vehicle_raw(page, plate, "hom-nay", prev_fingerprint)
         if fresh is not None:
             frames.append(fresh)
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    return combined, prev_fingerprint
 
 
 def main():
@@ -142,9 +126,12 @@ def main():
             goto_report_page(page)
             plates = list_all_plates(page)
             print(f"Tìm thấy {len(plates)} xe: {', '.join(plates)}")
+            prev_fingerprint = None  # xem adsun_common.export_vehicle_report
             for plate in plates:
                 try:
-                    plate_to_df[plate] = collect_vehicle_data(page, plate, day_start, day_end_inclusive, preset)
+                    plate_to_df[plate], prev_fingerprint = collect_vehicle_data(
+                        page, plate, day_start, day_end_inclusive, preset, prev_fingerprint
+                    )
                 except Exception as e:
                     print(f"  [{plate}] LỖI khi lấy dữ liệu: {e}", file=sys.stderr)
                     plate_to_df[plate] = pd.DataFrame()
