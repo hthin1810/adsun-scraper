@@ -48,16 +48,11 @@ import raw_cache
 import sheets_client
 import zone_matching
 from adsun_common import (
+    export_vehicle_report,
     get_credentials,
     goto_report_page,
-    has_no_data,
     list_all_plates,
     login,
-    select_date_range,
-    select_vehicle,
-    view_report,
-    wait_report_loaded,
-    export_current_report,
 )
 
 RAW_RANGE_PRESET = "2"  # "2 ngày": du phu khung 8h hom qua - 8h hom nay
@@ -155,26 +150,21 @@ def export_all_vehicles(page, raw_dir: Path, range_preset=RAW_RANGE_PRESET):
 
     raw_dir.mkdir(parents=True, exist_ok=True)
     results = []  # list of (plate, path or None)
+    prev_fingerprint = None  # xem adsun_common.export_vehicle_report
 
     for plate in plates:
-        # Tai lai trang truoc moi xe: sau khi xuat Excel, toast thong bao
-        # "Da xu ly du lieu xong..." co the con hien va CHE cac nut khac,
-        # gay loi day chuyen cho xe ke tiep. Reload dam bao trang thai sach.
-        goto_report_page(page)
         try:
-            select_vehicle(page, plate)
-            select_date_range(page, range_preset)
-            view_report(page)
-            wait_report_loaded(page, timeout_seconds=300)
+            day_df, prev_fingerprint = export_vehicle_report(
+                page, plate, range_preset, HEADER_ROW_INDEX, prev_fingerprint
+            )
 
-            if has_no_data(page):
+            if day_df is None:
                 print(f"  [{plate}] Không có dữ liệu, bỏ qua.")
                 results.append((plate, None))
                 continue
 
-            download = export_current_report(page)
             raw_path = raw_dir / f"{plate}.xlsx"
-            download.save_as(str(raw_path))
+            day_df.to_excel(raw_path, index=False)
             print(f"  [{plate}] Đã xuất tạm: {raw_path.name}")
             results.append((plate, raw_path))
 
@@ -182,7 +172,6 @@ def export_all_vehicles(page, raw_dir: Path, range_preset=RAW_RANGE_PRESET):
             # con thay doi) — tan dung du lieu vua quet ma khong ton them chi
             # phi, giup lan "lam moi vi them vung" sau nay nhanh hon nhieu.
             try:
-                day_df = pd.read_excel(raw_path, header=HEADER_ROW_INDEX)
                 n = raw_cache.cache_complete_past_days(plate, day_df, date.today())
                 if n:
                     print(f"  [{plate}] Đã bồi thêm {n} ngày vào cache.")
@@ -430,7 +419,10 @@ def merge_reports(results, window_start, window_end, zone_polygons=None, pair_ru
         if raw_path is None or raw_path == "ERROR":
             continue
         try:
-            df = pd.read_excel(raw_path, header=HEADER_ROW_INDEX)
+            # raw_path duoc ghi lai boi export_all_vehicles TU DataFrame da
+            # doc san (header=HEADER_ROW_INDEX ap dung luc do roi) — o day chi
+            # can doc lai voi header mac dinh (dong dau tien).
+            df = pd.read_excel(raw_path)
         except Exception as e:
             print(f"  [{plate}] LỖI khi đọc file tạm {raw_path.name}: {e}", file=sys.stderr)
             continue
