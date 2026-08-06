@@ -1,18 +1,20 @@
 """
 Logic dung chung de dieu khien he thong Adsun (dinhvi.adsun.vn) bang Playwright.
 Da kiem chung thuc te (khong phai doan mo) — xem ghi chu trong tung ham.
-
-BAN NAY DUNG CHO GITHUB ACTIONS (repo cong khai) — KHONG co mat khau mac
-dinh hardcode nhu ban chay local, bat buoc phai truyen qua bien moi truong
-ADSUN_USER / ADSUN_PASS (xem .github/workflows/adsun_scrape.yml, lay tu
-GitHub Secrets) de tranh lo mat khau that trong code cong khai.
 """
 
 import os
 import re
+import sys
+from pathlib import Path
+
+import pandas as pd
 
 LOGIN_URL = "https://dinhvi.adsun.vn/"
 REPORT_URL = "https://dinhvi.adsun.vn/bao-cao-doanh-nghiep/bao-cao-chi-tiet-hanh-trinh"
+
+DEFAULT_USER = "Nghia0038"
+DEFAULT_PASS = "12312344"
 
 RANGE_PRESETS = {
     "hom-nay": "Hôm nay",
@@ -27,13 +29,8 @@ RANGE_PRESETS = {
 
 
 def get_credentials():
-    user = os.environ.get("ADSUN_USER")
-    pw = os.environ.get("ADSUN_PASS")
-    if not user or not pw:
-        raise RuntimeError(
-            "Thiếu biến môi trường ADSUN_USER / ADSUN_PASS. "
-            "Cần cấu hình trong GitHub Secrets của repo."
-        )
+    user = os.environ.get("ADSUN_USER", DEFAULT_USER)
+    pw = os.environ.get("ADSUN_PASS", DEFAULT_PASS)
     return user, pw
 
 
@@ -233,3 +230,65 @@ def export_current_report(page, timeout_toast_ms=90000, timeout_download_ms=1200
         pass
 
     return dl_info.value
+
+
+def fingerprint_df(df, time_column="Thời điểm", coord_column="Tọa độ"):
+    """"Dau van tay" don gian cua 1 DataFrame vua xuat: (so dong, moc thoi gian
+    dau, moc thoi gian cuoi, toa do dau). Dung de phat hien truong hop xuat bao
+    cao cho 1 xe MOI nhung file tai ve van la du lieu CUA XE NGAY TRUOC DO
+    trong vong lap — da gap thuc te NHIEU LAN (vd ngay 3/8, 4-5/8: co lan toi
+    7 xe khac nhau bi ghi CUNG 1 du lieu), nhieu kha nang do server Adsun tra
+    ve file dang cho xu ly trong hang doi (cua xe truoc) thay vi file MOI vua
+    yeu cau, du giao dien da hien thi dung xe/nut xuat da bam thanh cong. 2 xe
+    that (dinh vi doc lap) khong the co dung dau van tay nay — trung tuyet doi
+    la dau hieu chac chan cua loi tren."""
+    if df is None or df.empty or time_column not in df.columns:
+        return None
+    coord = df[coord_column].iloc[0] if coord_column in df.columns and len(df) else None
+    return (len(df), str(df[time_column].iloc[0]), str(df[time_column].iloc[-1]), str(coord))
+
+
+def export_vehicle_report(page, plate, range_preset, header_row_index, prev_fingerprint=None, max_attempts=3):
+    """Chon xe + khoang ngay + xem + xuat Excel + doc thanh DataFrame, CO KIEM
+    TRA chong "dinh du lieu xe truoc" (xem fingerprint_df) — neu dau van tay
+    file vua xuat TRUNG HET voi prev_fingerprint (dau van tay cua xe NGAY
+    TRUOC do trong vong lap), tai lai trang va thu lai toi da max_attempts lan
+    truoc khi chiu thua (raise loi, KHONG tra ve du lieu sai de tranh ghi de
+    mat du lieu that cua xe do).
+
+    Tra ve (DataFrame hoac None neu Adsun xac nhan khong co du lieu, fingerprint)."""
+    last_fp = None
+    for attempt in range(max_attempts):
+        goto_report_page(page)
+        select_vehicle(page, plate)
+        select_date_range(page, range_preset)
+        view_report(page)
+        wait_report_loaded(page, timeout_seconds=300)
+
+        if has_no_data(page):
+            return None, None
+
+        download = export_current_report(page)
+        tmp_path = Path(f"_tmp_verify_{plate}.xlsx")
+        download.save_as(str(tmp_path))
+        try:
+            df = pd.read_excel(tmp_path, header=header_row_index)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+        fp = fingerprint_df(df)
+        last_fp = fp
+        if fp is None or fp != prev_fingerprint:
+            return df, fp
+
+        print(
+            f"  [{plate}] Nghi ngo bi \"dính\" dữ liệu xe trước (dữ liệu xuất ra "
+            f"giống hệt) — thử lại lần {attempt + 2}/{max_attempts}...",
+            file=sys.stderr,
+        )
+
+    raise RuntimeError(
+        f"Xuất báo cáo cho {plate} liên tục trùng hệt dữ liệu xe trước đó sau "
+        f"{max_attempts} lần thử (có thể do server Adsun trả file cũ trong "
+        "hàng đợi) — bỏ qua xe này lần này để tránh ghi nhầm dữ liệu."
+    )
