@@ -53,6 +53,8 @@ from adsun_common import (
     goto_report_page,
     list_all_plates,
     login,
+    make_scrape_lock_owner_id,
+    wait_for_scrape_lock,
 )
 
 RAW_RANGE_PRESET = "2"  # "2 ngày": du phu khung 8h hom qua - 8h hom nay
@@ -520,24 +522,42 @@ def main():
 
     username, password = get_credentials()
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=not args.show)
-        context = browser.new_context(accept_downloads=True)
-        page = context.new_page()
+    # Khoa quet Adsun toan cuc (chung voi may local + GitHub Actions) — tranh
+    # 2 phien dang nhap Adsun DONG THOI gay nham lan du lieu giua cac xe (da
+    # gap thuc te nhieu lan, xem adsun_common.acquire_scrape_lock).
+    lock_owner = make_scrape_lock_owner_id()
+    if not wait_for_scrape_lock(lock_owner):
+        print(
+            "Đang có tiến trình khác quét Adsun, bỏ qua lần chạy này (lần chạy kế "
+            "tiếp sẽ tự bù nhờ cửa sổ báo cáo rộng).",
+            file=sys.stderr,
+        )
+        return
 
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=not args.show)
+            context = browser.new_context(accept_downloads=True)
+            page = context.new_page()
+
+            try:
+                login(page, username, password)
+                print("Đăng nhập thành công.")
+
+                goto_report_page(page)
+                results = export_all_vehicles(page, raw_dir)
+
+            except Exception as e:
+                page.screenshot(path="error.png")
+                print(f"\nLỗi: {e}\nĐã lưu ảnh chụp màn hình error.png để kiểm tra.", file=sys.stderr)
+                sys.exit(1)
+            finally:
+                browser.close()
+    finally:
         try:
-            login(page, username, password)
-            print("Đăng nhập thành công.")
-
-            goto_report_page(page)
-            results = export_all_vehicles(page, raw_dir)
-
-        except Exception as e:
-            page.screenshot(path="error.png")
-            print(f"\nLỗi: {e}\nĐã lưu ảnh chụp màn hình error.png để kiểm tra.", file=sys.stderr)
-            sys.exit(1)
-        finally:
-            browser.close()
+            sheets_client.release_scrape_lock(lock_owner)
+        except Exception:
+            pass
 
     # Danh dau "da kiem tra xong toi window_end" NGAY KHI buoc quet thanh
     # cong (bat ke sau do co du lieu hay khong) — dung lam moc de lan chay

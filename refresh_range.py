@@ -24,6 +24,8 @@ from adsun_common import (
     goto_report_page,
     list_all_plates,
     login,
+    make_scrape_lock_owner_id,
+    wait_for_scrape_lock,
 )
 from adsun_daily_report import (
     FINAL_COLUMNS,
@@ -116,35 +118,52 @@ def main():
     plate_to_df = {}
     failed_plates = set()
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=not args.show)
-        context = browser.new_context(accept_downloads=True)
-        page = context.new_page()
+    # Khoa quet Adsun toan cuc (chung voi may local + GitHub Actions) — xem
+    # adsun_common.acquire_scrape_lock.
+    lock_owner = make_scrape_lock_owner_id()
+    if not wait_for_scrape_lock(lock_owner):
+        print("Đang có tiến trình khác quét Adsun, bỏ qua lần chạy này.", file=sys.stderr)
         try:
-            login(page, username, password)
-            print("Đăng nhập thành công.")
-            goto_report_page(page)
-            plates = list_all_plates(page)
-            print(f"Tìm thấy {len(plates)} xe: {', '.join(plates)}")
-            prev_fingerprint = None  # xem adsun_common.export_vehicle_report
-            for plate in plates:
-                try:
-                    plate_to_df[plate], prev_fingerprint = collect_vehicle_data(
-                        page, plate, day_start, day_end_inclusive, preset, prev_fingerprint
-                    )
-                except Exception as e:
-                    print(f"  [{plate}] LỖI khi lấy dữ liệu: {e}", file=sys.stderr)
-                    plate_to_df[plate] = pd.DataFrame()
-                    failed_plates.add(plate)
-        except Exception as e:
-            print(f"Lỗi: {e}", file=sys.stderr)
+            sheets_client.set_refresh_status("error", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        except Exception:
+            pass
+        sys.exit(1)
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=not args.show)
+            context = browser.new_context(accept_downloads=True)
+            page = context.new_page()
             try:
-                sheets_client.set_refresh_status("error", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            except Exception:
-                pass
-            sys.exit(1)
-        finally:
-            browser.close()
+                login(page, username, password)
+                print("Đăng nhập thành công.")
+                goto_report_page(page)
+                plates = list_all_plates(page)
+                print(f"Tìm thấy {len(plates)} xe: {', '.join(plates)}")
+                prev_fingerprint = None  # xem adsun_common.export_vehicle_report
+                for plate in plates:
+                    try:
+                        plate_to_df[plate], prev_fingerprint = collect_vehicle_data(
+                            page, plate, day_start, day_end_inclusive, preset, prev_fingerprint
+                        )
+                    except Exception as e:
+                        print(f"  [{plate}] LỖI khi lấy dữ liệu: {e}", file=sys.stderr)
+                        plate_to_df[plate] = pd.DataFrame()
+                        failed_plates.add(plate)
+            except Exception as e:
+                print(f"Lỗi: {e}", file=sys.stderr)
+                try:
+                    sheets_client.set_refresh_status("error", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                except Exception:
+                    pass
+                sys.exit(1)
+            finally:
+                browser.close()
+    finally:
+        try:
+            sheets_client.release_scrape_lock(lock_owner)
+        except Exception:
+            pass
 
     try:
         zone_polygons = zone_matching.load_zone_polygons()

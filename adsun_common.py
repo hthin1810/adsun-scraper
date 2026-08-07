@@ -6,6 +6,8 @@ Da kiem chung thuc te (khong phai doan mo) — xem ghi chu trong tung ham.
 import os
 import re
 import sys
+import time
+import uuid
 from pathlib import Path
 
 import pandas as pd
@@ -318,3 +320,44 @@ def export_vehicle_report(page, plate, range_preset, header_row_index, prev_fing
         f"{max_attempts} lần thử (có thể do server Adsun trả file cũ trong "
         "hàng đợi) — bỏ qua xe này lần này để tránh ghi nhầm dữ liệu."
     )
+
+
+def make_scrape_lock_owner_id():
+    """Tao 1 ten dinh danh cho tien trinh hien tai de ghi vao khoa quet Adsun
+    toan cuc (xem sheets_client.acquire_scrape_lock) — gom nguon goc (GitHub
+    Actions run id neu co, hoac ten may local) + pid + 1 chuoi ngau nhien
+    ngan, du de phan biet trong log/khi debug."""
+    source = os.environ.get("GITHUB_RUN_ID")
+    if source:
+        source = f"github-actions-{source}"
+    else:
+        source = os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "local"
+    return f"{source}-pid{os.getpid()}-{uuid.uuid4().hex[:6]}"
+
+
+def wait_for_scrape_lock(owner_id, max_wait_seconds=300, poll_seconds=15):
+    """Cho toi khi thu duoc khoa quet Adsun toan cuc (xem sheets_client.
+    acquire_scrape_lock), toi da max_wait_seconds — vi 2 nguon co the cung
+    kich hoat gan nhau (vd nguoi dung bam "Cập nhật ngay" dung luc lich dinh
+    ky sap chay), cho 1 chut thay vi bo cuoc ngay se giup lan chay do khong
+    bi bo lo hoan toan. Tra ve True neu thu duoc khoa, False neu het gio ma
+    van bi khoa (nen bo qua lan chay nay, KHONG dang nhap Adsun)."""
+    import sheets_client  # import tre de tranh vong import (sheets_client khong can adsun_common)
+
+    waited = 0
+    while True:
+        try:
+            if sheets_client.acquire_scrape_lock(owner_id):
+                return True
+        except Exception as e:
+            print(f"[scrape_lock] Không kiểm tra được khóa ({e}) — cho chạy tiếp (fail-open).", file=sys.stderr)
+            return True
+        if waited >= max_wait_seconds:
+            return False
+        print(
+            f"[scrape_lock] Đang có tiến trình khác quét Adsun — chờ {poll_seconds}s rồi thử lại "
+            f"({waited}/{max_wait_seconds}s)...",
+            file=sys.stderr,
+        )
+        time.sleep(poll_seconds)
+        waited += poll_seconds

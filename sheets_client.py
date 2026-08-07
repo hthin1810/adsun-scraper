@@ -361,6 +361,90 @@ def set_refresh_status(status, completed_at=None):
     ws.update("A2:C2", [[requested_at, status, completed_at or ""]])
 
 
+SCRAPE_LOCK_TAB = "ScrapeLock"
+SCRAPE_LOCK_HEADER = ["locked_by", "locked_at"]
+SCRAPE_LOCK_STALE_MINUTES = 20  # qua thoi gian nay coi nhu tien trinh cu da chet/treo, cho giao lai khoa
+
+
+def acquire_scrape_lock(owner_id):
+    """Thu 'khoa' quet Adsun TOAN CUC qua Google Sheets — dung CHUNG giua may
+    local (AdsunHourlyReport, AdsunRefreshWatcher) VA GitHub Actions (chay
+    theo lich rieng + workflow_dispatch tu web app), vi ca 2 phia deu co the
+    dang nhap CUNG 1 tai khoan Adsun DOC LAP voi nhau. Da gap thuc te NHIEU
+    LAN (vd sang 7/8: 4 lan workflow_dispatch tren GitHub Actions chay chong
+    cheo dung luc voi cac lan chay local) khien server Adsun tra nham du lieu
+    giua cac phien dang nhap dong thoi — xe MOI duoc chon nhung file xuat ra
+    lai la cua 1 xe dang duoc XU LY BOI PHIEN KHAC (xem adsun_common.
+    export_vehicle_report — co che fingerprint chi bat duoc loi "dinh du lieu
+    xe truoc" TRONG CUNG 1 vong lap, KHONG the phat hien nhiem xuyen tu 1
+    tien trinh hoan toan khac dang chay song song).
+
+    Tra ve True neu thu duoc khoa (da ghi ten minh vao), False neu dang co
+    tien trinh KHAC giu khoa va con moi (chua qua SCRAPE_LOCK_STALE_MINUTES)."""
+    ss = get_report_spreadsheet()
+    ws = get_or_create_worksheet(ss, SCRAPE_LOCK_TAB, header=SCRAPE_LOCK_HEADER)
+    values = ws.get_all_values()
+    if len(values) > 1 and len(values[1]) > 0 and values[1][0]:
+        locked_by = values[1][0]
+        locked_at_str = values[1][1] if len(values[1]) > 1 else ""
+        try:
+            locked_at = datetime.strptime(locked_at_str, "%Y-%m-%d %H:%M:%S")
+            age_minutes = (datetime.now() - locked_at).total_seconds() / 60
+        except Exception:
+            age_minutes = None
+        if age_minutes is None or age_minutes < SCRAPE_LOCK_STALE_MINUTES:
+            return False
+        print(
+            f"[scrape_lock] Khoa cu cua '{locked_by}' da qua {age_minutes:.0f} phut "
+            "(coi nhu tien trinh do da chet) — giao lai khoa."
+        )
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ws.update("A2:B2", [[owner_id, now]])
+    return True
+
+
+def release_scrape_lock(owner_id):
+    """Tra khoa — CHI xoa neu dung minh dang giu (tranh vo tinh xoa mat khoa
+    cua 1 tien trinh KHAC da gianh duoc no sau khi minh het han/bi loi)."""
+    ss = get_report_spreadsheet()
+    ws = get_or_create_worksheet(ss, SCRAPE_LOCK_TAB, header=SCRAPE_LOCK_HEADER)
+    values = ws.get_all_values()
+    if len(values) > 1 and len(values[1]) > 0 and values[1][0] == owner_id:
+        ws.update("A2:B2", [["", ""]])
+
+
+SCHEDULE_STATE_TAB = "ScheduleState"
+SCHEDULE_STATE_HEADER = ["last_success_at"]
+
+
+def get_last_schedule_checkpoint():
+    """Tra ve thoi diem KET THUC (datetime) cua lan chay DINH KY (khong phai
+    'Cap nhat ngay') THANH CONG GAN NHAT — dung de tu dong mo rong cua so cap
+    nhat khi phat hien khoang trong lon hon binh thuong (xem
+    adsun_daily_report.compute_window). Tra ve None neu chua co lan nao (vd
+    lan dau chay) hoac doc loi."""
+    try:
+        ss = get_report_spreadsheet()
+        ws = get_or_create_worksheet(ss, SCHEDULE_STATE_TAB, header=SCHEDULE_STATE_HEADER)
+        values = ws.get_all_values()
+        if len(values) < 2 or not values[1] or not values[1][0]:
+            return None
+        return pd.to_datetime(values[1][0]).to_pydatetime()
+    except Exception:
+        return None
+
+
+def set_last_schedule_checkpoint(when):
+    """Ghi lai thoi diem KET THUC cua lan chay dinh ky THANH CONG — goi SAU
+    KHI da day xong len Google Sheets, o CUOI moi lan chay dinh ky thanh
+    cong (khong goi cho 'Cap nhat ngay'/'Cap nhat theo khoang' rieng le, chi
+    goi cho luong chinh adsun_daily_report.py, de phan anh dung "lan cap
+    nhat dinh ky gan nhat" — dung lam moc tu dong mo rong cua so lan sau)."""
+    ss = get_report_spreadsheet()
+    ws = get_or_create_worksheet(ss, SCHEDULE_STATE_TAB, header=SCHEDULE_STATE_HEADER)
+    ws.update("A2", [[when.strftime("%Y-%m-%d %H:%M:%S")]])
+
+
 ANNOTATIONS_TAB = "ReportAnnotations"
 ANNOTATIONS_HEADER = ["row_key", "ticked", "note", "cell_colors_json", "updated_at"]
 
