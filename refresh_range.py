@@ -122,12 +122,20 @@ def main():
     # adsun_common.acquire_scrape_lock.
     lock_owner = make_scrape_lock_owner_id()
     if not wait_for_scrape_lock(lock_owner):
-        print("Đang có tiến trình khác quét Adsun, bỏ qua lần chạy này.", file=sys.stderr)
+        # KHONG sys.exit(1) o day — day la truong hop BINH THUONG/AN TOAN (co
+        # tien trinh khac dang quet), khong phai loi that su. Thoat voi ma 1
+        # se lam GitHub Actions hien "failed" (do) gay hieu lam, trong khi day
+        # chinh la co che bao ve dang hoat dong dung nhu thiet ke.
+        print(
+            "Đang có tiến trình khác quét Adsun, bỏ qua lần chạy này (không phải lỗi — "
+            "lần chạy kế tiếp sẽ tự thử lại).",
+            file=sys.stderr,
+        )
         try:
-            sheets_client.set_refresh_status("error", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            sheets_client.set_refresh_status("done", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         except Exception:
             pass
-        sys.exit(1)
+        return
 
     try:
         with sync_playwright() as p:
