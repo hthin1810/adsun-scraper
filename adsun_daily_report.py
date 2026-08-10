@@ -197,29 +197,61 @@ def is_empty_zone(value):
     return str(value).strip() in EMPTY_ZONE_VALUES
 
 
-def extract_zone_points(df):
-    """Loc bo cac dong khong co Vung, roi gop cac dong LIEN TIEP cung mot Vung
-    thanh 1 diem duy nhat — nhung GIU LAI CA HAI moc thoi gian cua nhom do:
-    thoi diem DEN (ping dau tien, luu o TIME_COLUMN nhu truoc) va thoi diem
-    RỜI (ping CUOI CUNG con o vung do truoc khi doi vung, luu o "_leave").
-    build_transition_rows se dung thoi diem RỜI cho Vung A (gio lay = luc xe
-    THUC SU roi khoi noi lay hang, khong phai luc vua den do) va thoi diem
-    DEN cho Vung B (gio giao = luc xe vua toi noi giao)."""
+MAX_NOISE_EXCURSION_DEGREES = 0.003  # ~300m — xem extract_zone_points
+
+
+def extract_zone_points(df, max_excursion_degrees=MAX_NOISE_EXCURSION_DEGREES):
+    """Loc bo cac dong khong co Vung, roi gop cac dong cung mot Vung thanh 1
+    diem duy nhat — nhung GIU LAI CA HAI moc thoi gian cua nhom do: thoi diem
+    DEN (ping dau tien, luu o TIME_COLUMN nhu truoc) va thoi diem RỜI (ping
+    CUOI CUNG con o vung do truoc khi doi vung, luu o "_leave"). build_
+    transition_rows se dung thoi diem RỜI cho Vung A (gio lay = luc xe THUC
+    SU roi khoi noi lay hang) va thoi diem DEN cho Vung B (gio giao).
+
+    QUAN TRONG — phan biet 2 loai "mat vung" giua 2 lan cung 1 Vung:
+    1. NHIEU GPS/canh vung (xe dung yen, dinh vi chi chap chon giua "trong
+       vung" va "khong xac dinh" do sai so hoac vi tri sat ranh gioi ve) —
+       PHAI GOP lai thanh 1 diem lien tuc, khong duoc tach.
+    2. XE THUC SU ROI DI (lai sang noi khac) roi QUAY LAI dung vung do —
+       PHAI tach thanh 2 diem rieng, moi lan ghe la 1 su kien khac nhau.
+    Phan biet bang KHOANG CACH: neu MOI ping "khong xac dinh vung" trong
+    khoang trong do van nam GAN vi tri cuoi cung ghi nhan trong vung (trong
+    pham vi max_excursion_degrees, mac dinh ~300m), coi la nhieu GPS -> gop.
+    Neu CO IT NHAT 1 ping di xa hon nguong do, coi la roi that su -> tach.
+    (Chi dua vao "co dong nao xen giua khong" — khong xet khoang cach — se
+    sai theo 2 huong: da gap thuc te xe 51M68032 ngay 7/8 ghe BÊ TÔNG ĐẠI
+    THỊNH 19:39-19:48, LAI DI THAT hon 1km, quay lai 20:45-20:56 — can TACH;
+    nhung cung ngay do, KÊNH A41 dau ngay 8/8 co 3 lan "vao/ra" vung chi vi
+    dinh vi chap chon trong luc xe DUNG YEN tai 1 cho — can GOP, khong duoc
+    tach thanh 3 diem gia.)"""
     points = []
+    anchor_coord = None  # toa do CUOI CUNG ghi nhan luc CON TRONG 1 vung (KHONG doi trong luc "mat vung")
+    max_gap_dist = 0.0  # khoang cach XA NHAT tinh TU anchor_coord ma cac ping "khong xac dinh vung" giua 2 lan da di toi
     for _, row in df.iterrows():
         zone = row[ZONE_COLUMN]
+        coord = zone_matching.parse_coordinate(row.get("Tọa độ"))
+
         if is_empty_zone(zone):
-            continue
+            if coord is not None and anchor_coord is not None:
+                dist = ((coord[0] - anchor_coord[0]) ** 2 + (coord[1] - anchor_coord[1]) ** 2) ** 0.5
+                max_gap_dist = max(max_gap_dist, dist)
+            continue  # KHONG cap nhat anchor_coord o day — phai giu co dinh xuyen suot khoang trong
+
         snapshot = {
             TIME_COLUMN: row[TIME_COLUMN],
             "Tọa độ": row.get("Tọa độ"),
             "Địa chỉ": row.get("Địa chỉ"),
             "Nhiên liệu": row.get("Nhiên liệu"),
         }
-        if points and points[-1][ZONE_COLUMN] == zone:
-            points[-1]["_leave"] = snapshot  # van con o vung nay -> cap nhat moc "roi" moi nhat
-            continue
-        points.append({**snapshot, ZONE_COLUMN: zone, "_leave": snapshot})
+        same_zone_as_last_point = points and points[-1][ZONE_COLUMN] == zone
+        is_noise_gap = max_gap_dist <= max_excursion_degrees
+        if same_zone_as_last_point and is_noise_gap:
+            points[-1]["_leave"] = snapshot  # nhieu GPS/canh vung -> van tinh la lien tuc
+        else:
+            points.append({**snapshot, ZONE_COLUMN: zone, "_leave": snapshot})
+        if coord is not None:
+            anchor_coord = coord  # cap nhat lai moc so sanh (vua xac nhan lai vi tri trong vung)
+        max_gap_dist = 0.0
     return points
 
 

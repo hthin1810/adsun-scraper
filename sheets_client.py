@@ -145,6 +145,21 @@ def delete_zone(name):
     return False
 
 
+def update_zone_points(name, points):
+    """Ghi de lai hinh dang (points) cua 1 vung DA CO SAN — dung khi nguoi
+    dung keo/sua lai bien dang vung tren ban do (nut sua cua Leaflet.Draw).
+    Truoc day tinh nang sua hinh CHUA CO ham nay — chinh sua tren ban do chi
+    doi giao dien local, khong bao gio duoc gui len server nen mat het sau
+    khi tai lai trang."""
+    ss = get_spreadsheet()
+    ws = get_or_create_worksheet(ss, ZONES_TAB, header=ZONES_HEADER)
+    cell = ws.find(name, in_column=1)
+    if not cell:
+        return False
+    ws.update_cell(cell.row, 2, json.dumps(points, ensure_ascii=False))
+    return True
+
+
 def set_zone_easy_pass(name, easy_pass):
     """Bat/tat co "vung de di qua" cho 1 vung DA CO SAN (khong can xoa-tao
     lai). Vung de di qua: khi tinh Vung A/B, neu 1 nhom diem lien tiep cung
