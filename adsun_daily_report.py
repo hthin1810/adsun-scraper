@@ -152,12 +152,12 @@ def export_all_vehicles(page, raw_dir: Path, range_preset=RAW_RANGE_PRESET):
 
     raw_dir.mkdir(parents=True, exist_ok=True)
     results = []  # list of (plate, path or None)
-    prev_fingerprint = None  # xem adsun_common.export_vehicle_report
+    seen_fingerprints = set()  # tich luy ca lan chay — xem adsun_common.export_vehicle_report
 
     for plate in plates:
         try:
-            day_df, prev_fingerprint = export_vehicle_report(
-                page, plate, range_preset, HEADER_ROW_INDEX, prev_fingerprint
+            day_df, _fp = export_vehicle_report(
+                page, plate, range_preset, HEADER_ROW_INDEX, seen_fingerprints
             )
 
             if day_df is None:

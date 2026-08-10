@@ -57,6 +57,20 @@ def save_day_cache(plate, day: date, day_df: pd.DataFrame):
     return True
 
 
+def overwrite_day_cache(plate, day: date, day_df: pd.DataFrame):
+    """GHI DE cache cho 1 (xe, ngay) DU DA CO SAN — dung khi biet chac cache
+    cu bi sai (vd loi "dinh" du lieu xe khac luc quet, xem adsun_common.
+    export_vehicle_report) va can sua lai thu cong. Khac save_day_cache (chi
+    ghi khi chua co) — ham nay LUON ghi de."""
+    if _USE_DRIVE:
+        import drive_cache
+        return drive_cache.overwrite_day_cache(plate, day, day_df)
+    path = cache_path(plate, day)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    day_df.to_excel(path, index=False)
+    return True
+
+
 def cache_complete_past_days(plate, df: pd.DataFrame, today: date, time_column=TIME_COLUMN):
     """Tach df theo ngay va cache tat ca cac ngay DA QUA (< today). Goi ham
     nay sau moi lan quet Adsun (kha nang xay thanh cache dan theo thoi gian

@@ -229,6 +229,38 @@ def save_day_cache(plate, day: date, day_df: pd.DataFrame):
     return True
 
 
+def overwrite_day_cache(plate, day: date, day_df: pd.DataFrame):
+    """GHI DE noi dung file cache (xe, ngay) tren Drive DU DA CO SAN (khac
+    save_day_cache — chi ghi khi CHUA co). Dung khi phat hien 1 file cache da
+    luu SAI du lieu (vd bi loi xuat bao cao "dinh" du lieu xe khac — xem
+    adsun_common.export_vehicle_report) va can sua lai thu cong, vi cache
+    thuong la "ghi 1 lan, khong bao gio ghi de" nen loi sai se ton tai vinh
+    vien neu khong chu dong ghi de nhu the nay."""
+    file_name = f"{day:%Y-%m-%d}.xlsx"
+    existing = _list_plate_files(plate)
+    file_id = existing.get(file_name)
+
+    buf = io.BytesIO()
+    day_df.to_excel(buf, index=False)
+    buf.seek(0)
+
+    if file_id is None:
+        return save_day_cache(plate, day, day_df)
+
+    r = requests.patch(
+        f"{API_UPLOAD}/{file_id}",
+        headers={
+            **_headers(),
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        },
+        params={"uploadType": "media", "supportsAllDrives": "true"},
+        data=buf.read(),
+        timeout=60,
+    )
+    r.raise_for_status()
+    return True
+
+
 def cache_complete_past_days(plate, df: pd.DataFrame, today: date, time_column=TIME_COLUMN):
     cached_count = 0
     if df.empty:

@@ -250,7 +250,7 @@ def fingerprint_df(df, time_column="Thời điểm", coord_column="Tọa độ")
     return (len(df), str(df[time_column].iloc[0]), str(df[time_column].iloc[-1]), str(coord))
 
 
-def export_vehicle_report(page, plate, range_preset, header_row_index, prev_fingerprint=None, max_attempts=3):
+def export_vehicle_report(page, plate, range_preset, header_row_index, seen_fingerprints=None, max_attempts=3):
     """Chon xe + khoang ngay + xem + xuat Excel + doc thanh DataFrame, voi 2
     lop bao ve chong loi thuc te da gap NHIEU LAN khi quet lien tuc nhieu xe
     trong 1 phien trinh duyet (dac biet cac xe cuoi danh sach, sau khi da
@@ -260,16 +260,26 @@ def export_vehicle_report(page, plate, range_preset, header_row_index, prev_fing
        trang tai) — bat Exception BAT KY trong ca chuoi chon xe/xem/xuat, tai
        lai trang va thu lai (KHONG de loi lam hong ca lan quet).
     2. "Dinh du lieu xe truoc" — server Adsun tra ve file dang xu ly trong
-       hang doi (cua xe TRUOC do) thay vi file MOI vua yeu cau, du giao dien
-       da hien dung xe. Phat hien bang fingerprint_df: neu dau van tay file
-       vua xuat TRUNG HET voi prev_fingerprint (xe ngay truoc trong vong
-       lap), cung tai lai va thu lai.
+       hang doi (CUA 1 XE BAT KY DA QUET TRUOC DO trong lan chay nay, KHONG
+       nhat thiet la xe NGAY LIEN TRUOC) thay vi file MOI vua yeu cau, du
+       giao dien da hien dung xe. Da gap thuc te (5/8): 6 xe khac nhau, KHONG
+       lien tiep nhau trong vong lap, deu bi "dinh" dung 1 xe (04889) — kiem
+       tra chi xe ngay truoc (1 gia tri) la KHONG DU, phai kiem tra voi TOAN
+       BO cac xe da quet thanh cong tu dau lan chay nay (seen_fingerprints,
+       1 set duoc TICH LUY va truyen chung xuyen suot vong lap cua ham goi).
 
     Ca 2 truong hop deu thu lai toi da max_attempts lan (moi lan cho them 1
     chut de trang on dinh) truoc khi chiu thua han (raise loi ro rang, KHONG
     tra ve du lieu sai/nghi ngo de tranh ghi de mat du lieu that cua xe do).
 
+    seen_fingerprints: 1 set (nen dung CHUNG 1 object xuyen suot vong lap
+    quet nhieu xe cua ham goi, vi ham nay se TU THEM fingerprint moi vao set
+    do truoc khi tra ve thanh cong — khong can ham goi tu quan ly). Neu
+    khong truyen (None), tao 1 set rieng cho lan goi nay (khong tich luy).
+
     Tra ve (DataFrame hoac None neu Adsun xac nhan khong co du lieu, fingerprint)."""
+    if seen_fingerprints is None:
+        seen_fingerprints = set()
     last_error = None
     for attempt in range(max_attempts):
         try:
@@ -301,13 +311,15 @@ def export_vehicle_report(page, plate, range_preset, header_row_index, prev_fing
             continue
 
         fp = fingerprint_df(df)
-        if fp is None or fp != prev_fingerprint:
+        if fp is None or fp not in seen_fingerprints:
+            if fp is not None:
+                seen_fingerprints.add(fp)
             return df, fp
 
         last_error = None
         print(
-            f"  [{plate}] Nghi ngo bi \"dính\" dữ liệu xe trước (dữ liệu xuất ra "
-            f"giống hệt) — thử lại lần {attempt + 2}/{max_attempts}...",
+            f"  [{plate}] Nghi ngo bi \"dính\" dữ liệu 1 xe đã quét trước đó (dữ liệu "
+            f"xuất ra giống hệt) — thử lại lần {attempt + 2}/{max_attempts}...",
             file=sys.stderr,
         )
 
@@ -316,7 +328,7 @@ def export_vehicle_report(page, plate, range_preset, header_row_index, prev_fing
             f"Xuất báo cáo cho {plate} liên tục lỗi sau {max_attempts} lần thử: {last_error}"
         )
     raise RuntimeError(
-        f"Xuất báo cáo cho {plate} liên tục trùng hệt dữ liệu xe trước đó sau "
+        f"Xuất báo cáo cho {plate} liên tục trùng hệt dữ liệu 1 xe đã quét trước đó sau "
         f"{max_attempts} lần thử (có thể do server Adsun trả file cũ trong "
         "hàng đợi) — bỏ qua xe này lần này để tránh ghi nhầm dữ liệu."
     )

@@ -54,14 +54,16 @@ def pick_preset(earliest_day: date, today: date):
     return "31"
 
 
-def fetch_vehicle_raw(page, plate, range_preset, prev_fingerprint=None):
+def fetch_vehicle_raw(page, plate, range_preset, seen_fingerprints=None):
     """Wrapper mong quanh adsun_common.export_vehicle_report — xem docstring
-    ham do ve co che chong "dinh" du lieu xe truoc (da gap thuc te nhieu lan,
-    co lan toi 7 xe bi ghi cung 1 du lieu). Tra ve (df, fingerprint_moi)."""
-    return export_vehicle_report(page, plate, range_preset, HEADER_ROW_INDEX, prev_fingerprint)
+    ham do ve co che chong "dinh" du lieu 1 xe da quet truoc do (da gap thuc
+    te nhieu lan, co lan toi 7 xe bi ghi cung 1 du lieu — KHONG nhat thiet la
+    xe ngay lien truoc, nen seen_fingerprints can la 1 set TICH LUY xuyen
+    suot ca lan chay, khong chi 1 gia tri don). Tra ve (df, fingerprint)."""
+    return export_vehicle_report(page, plate, range_preset, HEADER_ROW_INDEX, seen_fingerprints)
 
 
-def collect_vehicle_data(page, plate, day_start: date, day_end_inclusive: date, preset, prev_fingerprint=None):
+def collect_vehicle_data(page, plate, day_start: date, day_end_inclusive: date, preset, seen_fingerprints=None):
     """Tra ve DataFrame gop du lieu cho vehicle trong khoang ngay lich (ca
     hai dau), uu tien dung cache, chi quet Adsun neu con thieu ngay nao
     (khong tinh 'hom nay' — luon phai quet tuoi vi con thay doi).
@@ -78,7 +80,7 @@ def collect_vehicle_data(page, plate, day_start: date, day_end_inclusive: date, 
     missing_excluding_today = missing - {today}
 
     if missing_excluding_today:
-        fresh_df, prev_fingerprint = fetch_vehicle_raw(page, plate, preset, prev_fingerprint)
+        fresh_df, _fp = fetch_vehicle_raw(page, plate, preset, seen_fingerprints)
         if fresh_df is not None:
             n = raw_cache.cache_complete_past_days(plate, fresh_df, today)
             if n:
@@ -87,11 +89,11 @@ def collect_vehicle_data(page, plate, day_start: date, day_end_inclusive: date, 
 
     frames = [cached_df] if not cached_df.empty else []
     if today < range_end_exclusive:
-        fresh, prev_fingerprint = fetch_vehicle_raw(page, plate, "hom-nay", prev_fingerprint)
+        fresh, _fp = fetch_vehicle_raw(page, plate, "hom-nay", seen_fingerprints)
         if fresh is not None:
             frames.append(fresh)
     combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-    return combined, prev_fingerprint
+    return combined
 
 
 def main():
@@ -148,11 +150,11 @@ def main():
                 goto_report_page(page)
                 plates = list_all_plates(page)
                 print(f"Tìm thấy {len(plates)} xe: {', '.join(plates)}")
-                prev_fingerprint = None  # xem adsun_common.export_vehicle_report
+                seen_fingerprints = set()  # tich luy ca lan chay — xem adsun_common.export_vehicle_report
                 for plate in plates:
                     try:
-                        plate_to_df[plate], prev_fingerprint = collect_vehicle_data(
-                            page, plate, day_start, day_end_inclusive, preset, prev_fingerprint
+                        plate_to_df[plate] = collect_vehicle_data(
+                            page, plate, day_start, day_end_inclusive, preset, seen_fingerprints
                         )
                     except Exception as e:
                         print(f"  [{plate}] LỖI khi lấy dữ liệu: {e}", file=sys.stderr)
