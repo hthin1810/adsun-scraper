@@ -295,7 +295,13 @@ def export_vehicle_report(page, plate, range_preset, header_row_index, seen_fing
                 return None, None
 
             download = export_current_report(page)
-            tmp_path = Path(f"_tmp_verify_{plate}.xlsx")
+            # Ten file tam PHAI duy nhat theo ca tien trinh (pid) VA lan thu —
+            # dat co dinh theo TEN XE (nhu truoc day) tung gay loi thuc te
+            # (10/8): 2 tien trinh chay gan nhau (vd script thu cong + lich
+            # tu dong) cung ghi vao dung 1 file, Windows khoa file gay
+            # "PermissionError: [Errno 13] Permission denied" cho CA 13 XE
+            # trong 1 lan chay, lam mat trang toan bo du lieu hom do.
+            tmp_path = Path(f"_tmp_verify_{plate}_{os.getpid()}_{uuid.uuid4().hex[:8]}.xlsx")
             download.save_as(str(tmp_path))
             try:
                 df = pd.read_excel(tmp_path, header=header_row_index)
