@@ -6,6 +6,7 @@ Da kiem chung thuc te (khong phai doan mo) — xem ghi chu trong tung ham.
 import os
 import re
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -312,13 +313,18 @@ def export_vehicle_report(page, plate, range_preset, header_row_index, seen_fing
                 return None, None
 
             download = export_current_report(page)
-            # Ten file tam PHAI duy nhat theo ca tien trinh (pid) VA lan thu —
-            # dat co dinh theo TEN XE (nhu truoc day) tung gay loi thuc te
-            # (10/8): 2 tien trinh chay gan nhau (vd script thu cong + lich
-            # tu dong) cung ghi vao dung 1 file, Windows khoa file gay
-            # "PermissionError: [Errno 13] Permission denied" cho CA 13 XE
-            # trong 1 lan chay, lam mat trang toan bo du lieu hom do.
-            tmp_path = Path(f"_tmp_verify_{plate}_{os.getpid()}_{uuid.uuid4().hex[:8]}.xlsx")
+            # Luu vao THU MUC TAM CUA HE THONG (tempfile — vd %TEMP% tren
+            # Windows), KHONG luu ngay trong thu muc du an. Da gap thuc te 2
+            # lan: (10/8) ten file co dinh theo xe gay dung do 2 tien trinh
+            # ghi cung 1 file; (12/8) DU DA doi ten file duy nhat theo pid+
+            # uuid, 1 xe (51L97909) van lien tuc bi "PermissionError" o CA 6
+            # LAN CHAY RIENG BIET — vi thu muc du an co qua nhieu tien trinh
+            # (lich tu dong + refresh_range thu cong) cung ghi/doc file lien
+            # tuc khi may dang chay don dap, de bi phan mem diet virus/Windows
+            # quet va khoa tam thoi ngay sau khi tao. Thu muc tam he thong it
+            # bi anh huong hon vi khong phai noi luu file du lieu du an.
+            with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp_file:
+                tmp_path = Path(tmp_file.name)
             download.save_as(str(tmp_path))
             try:
                 df = pd.read_excel(tmp_path, header=header_row_index)
