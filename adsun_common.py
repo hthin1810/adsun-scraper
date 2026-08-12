@@ -153,13 +153,30 @@ def list_all_plates(page):
 
 
 def select_vehicle(page, plate):
+    """QUAN TRONG: tim option co text TRUNG KHOP TUYET DOI voi bien so roi bam
+    TRUC TIEP vao do — KHONG chi go tim roi bam Enter "mu quang". Da gap thuc
+    te (11-12/8): 50H04889 va 51M65797 lien tuc bi "hoan doi" du lieu cua
+    nhau qua NHIEU LAN CHAY RIENG BIET (cach nhau hang gio, khong phai do
+    chay song song — khoa quet toan cuc da loai truong hop do) — nhieu kha
+    nang do bam Enter truoc khi danh sach da loc xong theo tu vua go, chon
+    nham 1 option con sot lai tu lan chon truoc. Bam truc tiep vao dung dong
+    chu trung khop tuyet doi loai bo hoan toan rui ro nay."""
     if not plate:
         return
     page.get_by_title("Thiết bị").click(timeout=5000)
     page.locator(".select__option").first.wait_for(state="visible", timeout=10000)
     page.keyboard.type(plate)
     page.wait_for_timeout(800)
-    page.keyboard.press("Enter")
+
+    option = page.locator(".select__option", has_text=plate).first
+    try:
+        option.wait_for(state="visible", timeout=3000)
+        if option.inner_text().strip() == plate:
+            option.click(timeout=5000)
+        else:
+            page.keyboard.press("Enter")  # khong khop tuyet doi, danh du phong nhu cu
+    except Exception:
+        page.keyboard.press("Enter")  # khong tim thay option ro rang, danh du phong nhu cu
     page.wait_for_timeout(500)
 
 
