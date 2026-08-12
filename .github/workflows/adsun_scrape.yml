@@ -3,13 +3,14 @@ name: Adsun Hourly Scrape
 on:
   schedule:
     - cron: "23 * * * *"   # phut thu 23 cua MOI GIO (gio UTC) — tranh dau gio (phut 0-10) la luc GitHub de bi tre lich nhat
-    # Lich chay phu, cach lich tren 30 phut — GitHub Actions cron la "best
-    # effort", thuc te da gap truong hop GitHub tu ngung kich hoat lich TRONG
+    # 2 lich chay phu, cach nhau ~20 phut — GitHub Actions cron la "best
+    # effort", thuc te da gap NHIEU LAN GitHub tu ngung kich hoat lich TRONG
     # VAI GIO LIEN TIEP (khong phai chi tre vai phut nhu truoc) du workflow
-    # van "active" binh thuong (xac nhan ngay 10/8: khong co lan chay nao tu
-    # 23:48 den hon 2 gio sau). Co 2 lich/gio giam dang ke kha nang CA HAI
-    # cung bi bo lo trong cung 1 gio.
-    - cron: "53 * * * *"
+    # van "active" binh thuong (xac nhan ngay 10/8 VA 12/8: co lan khong
+    # chay lan nao tu 23:48 den hon 2 gio sau, lan khac ~1.5 gio). 3 lich/gio
+    # giam manh kha nang CA 3 cung bi bo lo trong cung 1 gio.
+    - cron: "43 * * * *"
+    - cron: "58 * * * *"
   workflow_dispatch:       # cho phep bam "Run workflow" thu cong tren GitHub,
     inputs:                # hoac web app tu kich hoat qua GitHub API (xem
       mode:                 # github_dispatch.py) khi bam "Cap nhat ngay" /
