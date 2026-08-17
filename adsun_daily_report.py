@@ -57,7 +57,9 @@ from adsun_common import (
     wait_for_scrape_lock,
 )
 
-RAW_RANGE_PRESET = "2"  # "2 ngày": du phu khung 8h hom qua - 8h hom nay
+RAW_RANGE_PRESET = "3"  # "3 ngày" — khop voi MAX_LOOKBACK_HOURS=72h ben duoi, du du lieu
+# tho de tu bu neu lan chay truoc gan nhat bi gian doan toi 3 ngay (xem giai
+# thich o MAX_LOOKBACK_HOURS).
 TIME_COLUMN = "Thời điểm"
 ZONE_COLUMN = "Vùng"
 HEADER_ROW_INDEX = 3  # dong 4 trong file excel (0-indexed) la dong ten cot
@@ -102,7 +104,17 @@ REPORT_COLUMNS = [
 
 
 ROLLING_WINDOW_HOURS = 24  # xem giai thich trong compute_window() ve ly do can rong toi 24h
-MAX_LOOKBACK_HOURS = 24  # gioi han an toan khi tu dong mo rong cua so bu khoang trong
+# QUAN TRONG (16-17/8): may local NGU/TAT ~66 tieng (14/8 14:52 -> 17/8 09:07,
+# xac nhan qua Windows Event Log — khong phai loi code) khien lich chay dinh
+# ky local KHONG THUC THI duoc lan nao trong suot khoang do. Khi may tinh
+# chay lai, cua so tu bu CU (24h) khong voi toi duoc phan du lieu qua xa
+# (>24h) nen mat vinh vien cho toi khi phat hien va vao tay. RAW_RANGE_PRESET
+# ("2" = 2 ngay ~ 48h) da san du lieu tho de tinh bu xa hon MA KHONG TON
+# THEM CHI PHI QUET — chi can nang gioi han O DAU RA. Nang MAX_LOOKBACK_HOURS
+# len 72h (rong hon ca 48h du lieu tho hien co) de neu may tinh gian doan
+# vai ngay (ngu/tat/mat dien) roi chay lai, lan chay thanh cong dau tien co
+# co hoi tu bu XA HON — khong con phai cho toi khi co nguoi bao lai.
+MAX_LOOKBACK_HOURS = 72  # gioi han an toan khi tu dong mo rong cua so bu khoang trong
 
 
 def compute_window(now: datetime, rolling_hours=ROLLING_WINDOW_HOURS, max_lookback_hours=MAX_LOOKBACK_HOURS):
