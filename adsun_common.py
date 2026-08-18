@@ -261,11 +261,43 @@ def fingerprint_df(df, time_column="Thời điểm", coord_column="Tọa độ")
     ve file dang cho xu ly trong hang doi (cua xe truoc) thay vi file MOI vua
     yeu cau, du giao dien da hien thi dung xe/nut xuat da bam thanh cong. 2 xe
     that (dinh vi doc lap) khong the co dung dau van tay nay — trung tuyet doi
-    la dau hieu chac chan cua loi tren."""
+    la dau hieu chac chan cua loi tren.
+
+    QUAN TRONG (7-10/8, phat hien 18/8): dau van tay tren CHI so sanh CA
+    KHOANG NHIEU NGAY duoc xuat lam MOT KHOI — neu server Adsun chi "dinh"
+    (tra nham) du lieu cua 1 NGAY CU THE ben trong khoang do (vd ca ngay 7/8
+    cua xe 51M97396 trung tuyet doi 100% voi 04889, nhung tong ca khoang 14
+    ngay lai co so dong KHAC NHAU vi cac ngay khac van dung), dau van tay
+    tren se KHONG bat duoc — 2 tong the khac nhau du 1 phan ben trong giong
+    het. Da xac nhan thuc te: xe 04889 va 97396 bi trung nguyen ca ngay 7/8,
+    8/8, 9/8, 10/8 (03358/03358 dong tung ngay giong tuyet doi tung toa do/
+    moc gio) nhung tong 14 ngay la 34412 vs 34418 dong — khac nhau nen fingerprint
+    ca khoi khong phat hien ra. Xem fingerprint_days() ben duoi de bat rieng
+    tung ngay."""
     if df is None or df.empty or time_column not in df.columns:
         return None
     coord = df[coord_column].iloc[0] if coord_column in df.columns and len(df) else None
     return (len(df), str(df[time_column].iloc[0]), str(df[time_column].iloc[-1]), str(coord))
+
+
+def fingerprint_days(df, time_column="Thời điểm", coord_column="Tọa độ"):
+    """Giong fingerprint_df nhung tra ve 1 SET dau van tay RIENG CHO TUNG
+    NGAY ben trong df (thay vi 1 dau van tay duy nhat cho ca khoi) — bat duoc
+    truong hop server Adsun chi "dinh" nham du lieu cua 1-2 NGAY CU THE trong
+    1 lan xuat nhieu ngay, du tong so dong ca khoi khac nhau (xem giai thich
+    trong fingerprint_df). Moi phan tu: ("day", ngay_ISO, so_dong_ngay_do,
+    gio_dau, gio_cuoi, toa_do_dau) — tien to "day" de khong the trung tinh
+    co voi dau van tay ca khoi cua fingerprint_df (khac do dai tuple)."""
+    if df is None or df.empty or time_column not in df.columns:
+        return set()
+    out = set()
+    dates = pd.to_datetime(df[time_column]).dt.date
+    for d, group in df.groupby(dates):
+        if group.empty:
+            continue
+        coord = group[coord_column].iloc[0] if coord_column in group.columns else None
+        out.add(("day", str(d), len(group), str(group[time_column].iloc[0]), str(group[time_column].iloc[-1]), str(coord)))
+    return out
 
 
 def export_vehicle_report(page, plate, range_preset, header_row_index, seen_fingerprints=None, max_attempts=3):
@@ -340,17 +372,34 @@ def export_vehicle_report(page, plate, range_preset, header_row_index, seen_fing
             continue
 
         fp = fingerprint_df(df)
-        if fp is None or fp not in seen_fingerprints:
+        day_fps = fingerprint_days(df)
+        colliding_days = day_fps & seen_fingerprints
+        whole_collision = fp is not None and fp in seen_fingerprints
+
+        if not whole_collision and not colliding_days:
             if fp is not None:
                 seen_fingerprints.add(fp)
+            seen_fingerprints.update(day_fps)
             return df, fp
 
         last_error = None
-        print(
-            f"  [{plate}] Nghi ngo bi \"dính\" dữ liệu 1 xe đã quét trước đó (dữ liệu "
-            f"xuất ra giống hệt) — thử lại lần {attempt + 2}/{max_attempts}...",
-            file=sys.stderr,
-        )
+        if colliding_days and not whole_collision:
+            # Trung TUNG NGAY CU THE (khong phai ca khoi) — nghi ngo hon vi
+            # co the la du lieu that trung ngau nhien 1-2 diem; in ro ngay
+            # nao de de doi chieu/debug neu van con sai sau khi thu lai.
+            bad_dates = sorted(d[1] for d in colliding_days)
+            print(
+                f"  [{plate}] Nghi ngo bi \"dính\" dữ liệu xe khác cho (các) ngày "
+                f"{', '.join(bad_dates)} (dữ liệu ngày đó giống hệt 1 xe đã quét trước) "
+                f"— thử lại lần {attempt + 2}/{max_attempts}...",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"  [{plate}] Nghi ngo bi \"dính\" dữ liệu 1 xe đã quét trước đó (dữ liệu "
+                f"xuất ra giống hệt) — thử lại lần {attempt + 2}/{max_attempts}...",
+                file=sys.stderr,
+            )
 
     if last_error is not None:
         raise RuntimeError(
